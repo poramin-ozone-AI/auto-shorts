@@ -132,7 +132,7 @@ def verify(script, srcs):
     warnings.append("การตรวจความถูกต้องชั้นที่ 2 ไม่สำเร็จ ใช้บทจากรอบแรก ต้องเช็กแหล่งเองให้ละเอียด")
     log("  ตรวจชั้น 2 ไม่สำเร็จ ใช้บทเดิม")
     return script, []
-  def audio_duration(wav):
+def audio_duration(wav):
     out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                                    "-of", "csv=p=0", wav])
     return float(out.strip())
@@ -177,7 +177,7 @@ def make_voice(scenes):
     warnings.append("เสียงพากย์ใช้ edge-tts (Gemini TTS ล้มเหลวหรือเกินโควตา)")
     tts_edge(text, wav)
     return wav
-  def solid_image(path):
+def solid_image(path):
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=0xFFE066:s=1080x1920",
          "-frames:v", "1", path])
 
@@ -211,7 +211,7 @@ def make_clip(img, dur, i, out):
           "format=yuv420p")
     run(["ffmpeg", "-y", "-loglevel", "error", "-i", img, "-vf", vf, "-frames:v", str(frames),
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-r", str(FPS), out])
-  def main():
+def main():
     script, srcs = get_script()
     script, srcs2 = verify(script, srcs)
     seen, all_srcs = set(), []
