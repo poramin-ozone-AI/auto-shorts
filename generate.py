@@ -2,7 +2,9 @@ import os, sys, re, json, time, base64, random, subprocess, urllib.parse
 import requests
 
 API_KEY = os.environ["GEMINI_API_KEY"]
-NICHE = os.environ.get("NICHE", "").strip() or "ผสมหลายแนว (วิทยาศาสตร์ ร่างกายมนุษย์ สัตว์ อวกาศ ประวัติศาสตร์)"
+CATEGORIES = ["ร่างกายมนุษย์", "สัตว์", "อวกาศและดาราศาสตร์", "ประวัติศาสตร์", "ธรรมชาติและภูมิศาสตร์",
+              "ฟิสิกส์และเคมีในชีวิตประจำวัน", "สมองและจิตวิทยา", "พืชและเห็ดรา", "มหาสมุทรและสัตว์ทะเล", "เทคโนโลยีและสิ่งประดิษฐ์"]
+NICHE = os.environ.get("NICHE", "").strip() or random.choice(CATEGORIES)
 VOICE = os.environ.get("VOICE_NAME", "").strip() or "Enceladus"
 
 TEXT_MODEL = "gemini-3.8-flash"
@@ -19,7 +21,7 @@ CHARACTER = ("the single main character is a white round-headed stickman with th
 
 WRITER = """คุณคือนักเขียนบทคลิปสั้นแนวตั้งภาษาไทยแนว "ความรู้แปลกๆ"
 ทำตามลำดับ:
-1) ใช้ Google Search ค้นข้อมูลจริงก่อน แล้วเลือกหัวข้อแนว: __NICHE__
+1) ใช้ Google Search ค้นข้อมูลจริงก่อน แล้วเลือกหัวข้อในหมวด: __NICHE__ (ต้องอยู่ในหมวดนี้เท่านั้น เลือกเรื่องเฉพาะเจาะจงที่ไม่ใช่เรื่องดังที่ใครๆ ก็เล่า)
    ต้องเป็นเรื่องที่คนส่วนใหญ่ไม่รู้หรือขัดความเชื่อเดิม และห้ามซ้ำหัวข้อเหล่านี้:
 __PAST__
 2) ใช้เฉพาะข้อเท็จจริงที่มีแหล่งในผลค้นหา ตัวเลขและปีต้องตรงแหล่ง ถ้านักวิชาการยังถกเถียงให้พูดว่า "นักวิทยาศาสตร์เชื่อว่า"
@@ -45,6 +47,7 @@ __SOURCES__
 บทที่ต้องตรวจ:
 __SCRIPT__
 ตอบ JSON ล้วนๆ โครงเดิมทุกฟิลด์ เพิ่มฟิลด์ "changes" เป็นลิสต์ข้อความสั้นๆ ว่าแก้หรือตัดอะไร (ว่างได้)"""
+
 warnings = []
 os.makedirs("work", exist_ok=True)
 
@@ -73,8 +76,6 @@ def call(model, body, tries=4):
         if i < tries - 1:
             time.sleep(15 * (i + 1))
     return None
-
-
 def ask(prompt):
     resp = call(TEXT_MODEL, {"contents": [{"parts": [{"text": prompt}]}],
                              "tools": [{"google_search": {}}]})
@@ -108,6 +109,7 @@ def get_script():
     past = ""
     if os.path.exists("past_titles.txt"):
         past = open("past_titles.txt", encoding="utf-8").read().strip()
+    log(f"[หมวดรอบนี้] {NICHE}")
     prompt = WRITER.replace("__NICHE__", NICHE).replace("__PAST__", past or "(ยังไม่มี)")
     for n in range(1, 6):
         log(f"[ขั้น 1] เขียนบท รอบที่ {n}/5")
@@ -132,6 +134,8 @@ def verify(script, srcs):
     warnings.append("การตรวจความถูกต้องชั้นที่ 2 ไม่สำเร็จ ใช้บทจากรอบแรก ต้องเช็กแหล่งเองให้ละเอียด")
     log("  ตรวจชั้น 2 ไม่สำเร็จ ใช้บทเดิม")
     return script, []
+
+
 def audio_duration(wav):
     out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                                    "-of", "csv=p=0", wav])
@@ -155,8 +159,6 @@ def tts_gemini(text, model, wav):
     except Exception as e:
         log(f"  แปลงเสียงไม่สำเร็จ: {e}")
         return False
-
-
 def tts_edge(text, wav):
     open("work/voice.txt", "w", encoding="utf-8").write(text)
     run(["edge-tts", "--voice", EDGE_VOICE, "--file", "work/voice.txt", "--write-media", "work/voice.mp3"])
@@ -177,6 +179,8 @@ def make_voice(scenes):
     warnings.append("เสียงพากย์ใช้ edge-tts (Gemini TTS ล้มเหลวหรือเกินโควตา)")
     tts_edge(text, wav)
     return wav
+
+
 def solid_image(path):
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=0xFFE066:s=1080x1920",
          "-frames:v", "1", path])
@@ -211,6 +215,8 @@ def make_clip(img, dur, i, out):
           "format=yuv420p")
     run(["ffmpeg", "-y", "-loglevel", "error", "-i", img, "-vf", vf, "-frames:v", str(frames),
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-r", str(FPS), out])
+
+
 def main():
     script, srcs = get_script()
     script, srcs2 = verify(script, srcs)
