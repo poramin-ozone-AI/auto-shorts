@@ -1,0 +1,49 @@
+name: make-short
+
+on:
+  workflow_dispatch:
+  # เปิดตอนช่วง E (ลบ # หน้าบรรทัด)
+  # schedule:
+  #   - cron: "0 0 * * *"    # 07:00 เวลาไทย
+  #   - cron: "0 11 * * *"   # 18:00 เวลาไทย
+
+permissions:
+  contents: write
+
+jobs:
+  make:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: ติดตั้งโปรแกรม
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+          pip install edge-tts requests
+
+      - name: ดึงชื่อคลิปเก่า
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          touch past_titles.txt
+          gh release list --limit 200 --json name --jq '.[].name' > past_titles.txt || true
+
+      - name: สร้างคลิป
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NICHE: ${{ vars.NICHE }}
+          VOICE_NAME: ${{ vars.VOICE_NAME }}
+        run: python generate.py
+
+      - name: แนบ MP4 ใน Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "clip-${{ github.run_id }}" output.mp4 \
+            --title "$(cat title.txt)" --notes-file notes.md
