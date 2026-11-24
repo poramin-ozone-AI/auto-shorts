@@ -7,28 +7,43 @@ CATEGORIES = ["ร่างกายมนุษย์", "สัตว์", "อ
 NICHE = os.environ.get("NICHE", "").strip() or random.choice(CATEGORIES)
 VOICE = os.environ.get("VOICE_NAME", "").strip() or "Enceladus"
 
-TEXT_MODEL = "gemini-3.8-flash"
-TTS_MODEL = "gemini-3.8-flash-tts"
+TEXT_MODEL = "gemini-3.8-flash"          # เขียนบท (โควตาน้อย 20 ครั้ง/วัน ใช้ครั้งเดียวต่อคลิป)
+TOPIC_MODEL = "gemini-3.5-flash-lite"    # เลือกหัวข้อ (โควตาแยก ถ้าใช้ไม่ได้จะถอยไปใช้ TEXT_MODEL)
+TTS_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"]
 EDGE_VOICE = "th-TH-NiwatNeural"
 TTS_STYLE = "พูดภาษาไทยแบบคนเล่าเรื่องให้เพื่อนฟัง ชัดเจนทุกคำ และเว้นจังหวะก่อนข้อเท็จจริงที่น่าทึ่งที่สุด:"
 API = "https://generativelanguage.googleapis.com/v1beta/models/"
 FPS = 30
 PAST_LIMIT = 30
+TOPIC_TRIES = 2
+
+WIKI_API = "https://en.wikipedia.org/w/api.php"
+WIKI_HEADERS = {"User-Agent": "auto-shorts/1.0 (https://github.com/poramin-ozone-AI/auto-shorts)"}
+ARTICLE_MAX = 14000
+ARTICLE_MIN = 2000
 
 STYLE = ("hand-drawn cartoon stickman style, thick black outlines, flat bright solid colors, "
          "simple clean background, vertical 9:16, absolutely no text, no letters, no numbers")
 CHARACTER = ("the single main character is a white round-headed stickman with a white and green mohawk, "
              "thick black stick limbs, big expressive eyes and an exaggerated facial expression")
 
-WRITER = """คุณคือนักเขียนบทคลิปสั้นแนวตั้งภาษาไทยแนว "ความรู้แปลกๆ"
-ทำตามลำดับ:
-1) ใช้ Google Search ค้นข้อมูลจริงก่อน แล้วเลือกหัวข้อในหมวด: __NICHE__ (ต้องอยู่ในหมวดนี้เท่านั้น เลือกเรื่องเฉพาะเจาะจงที่ไม่ใช่เรื่องดังที่ใครๆ ก็เล่า)
-   ต้องเป็นเรื่องที่คนส่วนใหญ่ไม่รู้หรือขัดความเชื่อเดิม และห้ามซ้ำหรือใกล้เคียงหัวข้อเหล่านี้ (รวมถึงเรื่องเดียวกันที่ตั้งชื่อต่างกัน):
+TOPIC_PROMPT = """คุณคือผู้คัดหัวข้อคลิปสั้นแนว "ความรู้แปลกๆ"
+เลือก 1 หัวข้อในหมวด: __NICHE__ (ต้องอยู่ในหมวดนี้เท่านั้น)
+เงื่อนไข:
+- ต้องมีบทความภาษาอังกฤษใน Wikipedia ที่ตรงตัวกับหัวข้อนี้ และบทความต้องยาวพอมีรายละเอียด
+- เป็นเรื่องเฉพาะเจาะจงที่คนส่วนใหญ่ไม่รู้หรือขัดความเชื่อเดิม ไม่ใช่เรื่องดังที่ใครๆ ก็เล่า
+- เลี่ยง การเมือง ศาสนา คำแนะนำทางการแพทย์ ความรุนแรงโหดร้าย เรื่องที่พาดพิงบุคคลจริงในทางเสียหาย
+- ห้ามซ้ำหรือใกล้เคียงหัวข้อเหล่านี้ (รวมถึงเรื่องเดียวกันที่ตั้งชื่อต่างกัน):
 __PAST__
-2) ค้นรอบที่สองเพื่อยืนยันข้อเท็จจริงหลักทุกข้อ ใช้แหล่งที่น่าเชื่อถือ เช่น มหาวิทยาลัย วารสารวิชาการ พิพิธภัณฑ์ หน่วยงานรัฐ องค์กรวิทยาศาสตร์ สำนักข่าวใหญ่ ห้ามใช้บล็อก ฟอรัม เว็บถามตอบ
-   ข้อเท็จจริงที่ยืนยันไม่ได้ให้ตัดทิ้ง ตัวเลขและปีต้องตรงแหล่ง ถ้านักวิชาการยังถกเถียงให้พูดว่า "นักวิทยาศาสตร์เชื่อว่า"
-3) เลี่ยงหัวข้อ: การเมือง ศาสนา คำแนะนำทางการแพทย์ที่คนอาจเอาไปทำตาม ความรุนแรงโหดร้าย เรื่องที่พาดพิงบุคคลจริงในทางเสียหาย
-4) คิดประโยคฮุกหลายแบบ (ไม่เกิน 12 คำ) แล้วเลือกแบบที่แรงที่สุดแบบเดียว
+ตอบ JSON ล้วนๆ ไม่มี markdown รูปแบบ:
+{"wiki_title":"ชื่อบทความภาษาอังกฤษใน Wikipedia ให้ตรงตัวที่สุด"}"""
+
+WRITER = """คุณคือนักเขียนบทคลิปสั้นแนวตั้งภาษาไทยแนว "ความรู้แปลกๆ"
+ด้านล่างคือเนื้อหาบทความ Wikipedia หัวข้อ: __TITLE__
+กฎเหล็ก: ใช้ข้อเท็จจริง ตัวเลข และปี จากบทความนี้เท่านั้น ห้ามเติมข้อมูลจากความจำหรือจากที่อื่น
+ถ้าบทความบอกว่ายังถกเถียงหรือไม่แน่ชัด ให้พูดว่า "นักวิทยาศาสตร์เชื่อว่า" หรือ "มีหลักฐานชี้ว่า" ข้อที่บทความไม่ยืนยันให้ตัดทิ้ง
+เลือกมุมที่น่าทึ่งที่สุดของเรื่องนี้ แล้วเขียนบททำตามลำดับ:
+1) คิดประโยคฮุกหลายแบบ (ไม่เกิน 12 คำ) แล้วเลือกแบบที่แรงที่สุดแบบเดียว
    รูปแบบที่ใช้ได้: คำถามที่ขัดความเชื่อ / ข้อเท็จจริงที่ฟังดูเป็นไปไม่ได้ / ผลลัพธ์ที่น่าตกใจ
    ฮุกต้องเป็นสัญญาที่คลิปเฉลยครบ ห้ามหลอกให้รอแล้วไม่เฉลย
 โครงเรื่อง: ฉากแรกคือฮุก เข้าเรื่องทันที ไม่ทักทาย
@@ -45,13 +60,15 @@ image_prompt เขียนเป็นภาษาอังกฤษ บรร
 ฉากแรกให้เป็นภาพ action ดึงสายตา
 ห้ามมีตัวหนังสือ ตัวเลขในภาพ และห้ามใส่วัตถุที่มักมีตัวหนัง เช่น ป้าย กราฟ แผนภูมิ หนังสือ หนังสือพิมพ์ จอคอมพิวเตอร์ ฉลาก ให้ใช้ภาพเปรียบเทียบแทน
 ชื่อคลิป (title) ต้องสั้น ภาษาไทย และระบุหัวข้อจริงชัดเจน (เช่น ชื่อสัตว์ ชื่อปรากฏการณ์) ห้ามตั้งชื่อกำกวม
-ช่อง source ใส่ชื่อเว็บที่พบจริงในผลค้นหาของฉากนั้น ห้ามแต่งชื่อเอง
 ทุกฉากต้องมีตัวละครสติกแมนตัวเดียวเป็นผู้กระทำ ระบุในภาพว่าสติกแมนกำลังทำอะไรกับวัตถุไหน
 ห้ามเริ่มสองฉากติดกันด้วยคำเชื่อมซ้ำ เช่น แล้ว, ดังนั้น, และ
 ฉากสรุปต้องเป็นประโยคที่คนจำได้ และห้ามพูดซ้ำคำที่ใช้ในฉากฮุก
 ห้ามใส่เครื่องหมาย " ภายในข้อความใดๆ ใน JSON
 ตอบเป็น JSON ล้วนๆ ไม่มี markdown รูปแบบ:
-{"title":"ชื่อคลิปสั้นๆ ภาษาไทย","part_note":"","scenes":[{"narration":"บทพูด","image_prompt":"English scene","source":"ชื่อเว็บที่ใช้"}]}"""
+{"title":"ชื่อคลิปสั้นๆ ภาษาไทย","part_note":"","scenes":[{"narration":"บทพูด","image_prompt":"English scene"}]}
+
+เนื้อหาบทความ:
+__ARTICLE__"""
 
 warnings = []
 os.makedirs("work", exist_ok=True)
@@ -70,41 +87,108 @@ def run(cmd):
 
 
 def call(model, body):
-    # ยิงครั้งเดียว ไม่ลองซ้ำ เพื่อประหยัดโควตา
-    try:
-        r = requests.post(API + model + ":generateContent",
-                          headers={"x-goog-api-key": API_KEY, "Content-Type": "application/json"},
-                          json=body, timeout=240)
-    except requests.RequestException as e:
-        log(f"  [API {model}] เชื่อมต่อไม่ได้: {e}")
-        return None
-    if r.status_code == 200:
-        return r.json()
-    if r.status_code == 429:
-        log(f"  [API {model}] 429 โควตาเต็ม")
-        raise QuotaError(model)
-    log(f"  [API {model}] {r.status_code}: {r.text[:300]}")
+    # ลองซ้ำ 1 ครั้งเฉพาะ 5xx หรือเน็ตหลุด ส่วน 429 หยุดทันที ไม่ยิงซ้ำ
+    for attempt in (1, 2):
+        try:
+            r = requests.post(API + model + ":generateContent",
+                              headers={"x-goog-api-key": API_KEY, "Content-Type": "application/json"},
+                              json=body, timeout=180)
+        except requests.RequestException as e:
+            log(f"  [API {model}] เชื่อมต่อไม่ได้: {e}")
+            r = None
+        if r is not None:
+            if r.status_code == 200:
+                return r.json()
+            if r.status_code == 429:
+                log(f"  [API {model}] 429 โควตาเต็ม")
+                raise QuotaError(model)
+            log(f"  [API {model}] {r.status_code}: {r.text[:300]}")
+            if r.status_code < 500:
+                return None
+        if attempt == 1:
+            log("  รอ 20 วินาทีแล้วลองอีกครั้งเดียว")
+            time.sleep(20)
     return None
 
 
-def ask(prompt):
-    resp = call(TEXT_MODEL, {"contents": [{"parts": [{"text": prompt}]}],
-                             "tools": [{"google_search": {}}]})
+def ask_json(prompt, model=TEXT_MODEL):
+    resp = call(model, {"contents": [{"parts": [{"text": prompt}]}],
+                             "generationConfig": {"responseMimeType": "application/json"}})
     if not resp:
-        return None, []
-    data, srcs = None, []
+        return None
     try:
         cand = resp["candidates"][0]
         text = "".join(p.get("text", "") for p in cand["content"]["parts"])
-        m = re.search(r"\{.*\}", text, re.S)
-        data = json.loads(m.group(0)) if m else None
-        for c in cand.get("groundingMetadata", {}).get("groundingChunks", []):
-            w = c.get("web")
-            if w and w.get("uri"):
-                srcs.append({"title": w.get("title", ""), "uri": w["uri"]})
+        try:
+            data = json.loads(text)
+        except Exception:
+            m = re.search(r"\{.*\}", text, re.S)
+            data = json.loads(m.group(0)) if m else None
+        return data if isinstance(data, dict) else None
     except Exception as e:
         log(f"  แกะคำตอบไม่ได้: {e}")
-    return data, srcs
+        return None
+
+
+def ask_topic(prompt):
+    # ลองรุ่นเล็ก (โควตาแยก) ก่อน แล้วค่อยถอยไปรุ่นเขียนบท ถ้าโควตาเต็มทั้งคู่ให้หยุด
+    quota = 0
+    for tm in (TOPIC_MODEL, TEXT_MODEL):
+        try:
+            data = ask_json(prompt, tm)
+        except QuotaError:
+            log(f"  {tm} โควตาเต็ม ลองรุ่นถัดไป")
+            quota += 1
+            continue
+        if data:
+            return data
+        log(f"  {tm} ไม่ได้คำตอบ ลองรุ่นถัดไป")
+    if quota == 2:
+        raise QuotaError("topic")
+    return None
+
+
+def wiki_get(params):
+    for attempt in (1, 2, 3):
+        try:
+            r = requests.get(WIKI_API, params={**params, "format": "json"}, headers=WIKI_HEADERS, timeout=30)
+            r.raise_for_status()
+            return r.json()
+        except (requests.RequestException, ValueError) as e:
+            if attempt == 3:
+                raise
+            log(f"  Wikipedia ตอบไม่ได้ ({e}) ลองใหม่")
+            time.sleep(3 * attempt)
+
+
+def fetch_article(title):
+    d = wiki_get({"action": "query", "prop": "extracts|info", "explaintext": 1,
+                  "redirects": 1, "inprop": "url", "titles": title})
+    for p in d.get("query", {}).get("pages", {}).values():
+        if "missing" in p or not p.get("extract"):
+            continue
+        text = p["extract"]
+        cut = re.search(r"\n== ?(References|See also|External links|Notes|Further reading|Bibliography|Sources) ?==", text)
+        if cut:
+            text = text[:cut.start()]
+        return p["title"], p.get("fullurl") or ("https://en.wikipedia.org/wiki/" + urllib.parse.quote(p["title"].replace(" ", "_"))), text[:ARTICLE_MAX].strip()
+    return None
+
+
+def find_article(title):
+    try:
+        art = fetch_article(title)
+        if art and len(art[2]) >= ARTICLE_MIN:
+            return art
+        d = wiki_get({"action": "query", "list": "search", "srsearch": title, "srlimit": 1})
+        hits = d.get("query", {}).get("search", [])
+        if hits:
+            art = fetch_article(hits[0]["title"])
+            if art and len(art[2]) >= ARTICLE_MIN:
+                return art
+    except Exception as e:
+        log(f"  ดึง Wikipedia ไม่สำเร็จ: {e}")
+    return None
 
 
 def valid(d):
@@ -113,7 +197,7 @@ def valid(d):
         total = sum(len(re.sub(r"\s", "", s["narration"])) for s in sc)
         return (isinstance(d["title"], str) and d["title"].strip() and 6 <= len(sc) <= 14
                 and all(s["narration"].strip() and s["image_prompt"].strip() for s in sc)
-                and 550 <= total <= 1300)
+                and 500 <= total <= 1400)
     except Exception:
         return False
 
@@ -124,20 +208,42 @@ def get_script():
         lines = [x.strip() for x in open("past_titles.txt", encoding="utf-8").read().splitlines() if x.strip()]
         past = "\n".join(lines[:PAST_LIMIT])
     log(f"[หมวดรอบนี้] {NICHE}")
-    prompt = WRITER.replace("__NICHE__", NICHE).replace("__PAST__", past or "(ยังไม่มี)")
-    log("[ขั้น 1] เขียนบท (รอบเดียว)")
+    avoid = []
+    art = None
     try:
-        data, srcs = ask(prompt)
+        for n in range(1, TOPIC_TRIES + 1):
+            log(f"[ขั้น 1] เลือกหัวข้อ รอบที่ {n}/{TOPIC_TRIES}")
+            past_txt = (past + "\n" + "\n".join(avoid)).strip() or "(ยังไม่มี)"
+            data = ask_topic(TOPIC_PROMPT.replace("__NICHE__", NICHE).replace("__PAST__", past_txt))
+            wt = (data or {}).get("wiki_title", "")
+            if not isinstance(wt, str) or not wt.strip():
+                log("  ไม่ได้ชื่อบทความ")
+                continue
+            log(f"  เสนอหัวข้อ: {wt}")
+            art = find_article(wt.strip())
+            if art:
+                break
+            log("  หา/ดึงบทความ Wikipedia ที่ยาวพอไม่ได้ ลองหัวข้ออื่น")
+            avoid.append(wt.strip())
+        if not art:
+            sys.exit("เลือกหัวข้อไม่สำเร็จ: ไม่พบบทความ Wikipedia ที่ใช้ได้ ลองกดรันใหม่")
+        title_en, url, text = art
+        log(f"[ขั้น 2] เขียนบทจากบทความ: {title_en} ({len(text)} ตัวอักษร)")
+        prompt = (WRITER.replace("__TITLE__", title_en).replace("__ARTICLE__", text))
+        data = None
+        for w in (1, 2):  # ลองเขียนซ้ำได้ 1 ครั้ง เฉพาะกรณีได้บทที่ผิดเกณฑ์ (ไม่ใช่ 429)
+            data = ask_json(prompt)
+            if data and valid(data):
+                break
+            log(f"  บทรอบที่ {w} ผิดเกณฑ์หรือแกะไม่ได้" + (" ลองเขียนใหม่" if w == 1 else ""))
     except QuotaError:
-        sys.exit("โควตา Gemini เต็ม (429) รอรีเซ็ตแล้วค่อยกดรันใหม่ ไม่ต้องแก้โค้ด")
+        sys.exit("โควตา Gemini เต็ม (429) รอรีเซ็ตแล้วค่อยกดรันใหม่ ถ้าเกิดตั้งแต่ครั้งแรกของวัน ให้เช็กหน้า aistudio.google.com/rate-limit")
     if not data:
         sys.exit("เขียนบทไม่สำเร็จ: ไม่ได้รับ JSON ที่แกะได้ ลองกดรันใหม่")
     if not valid(data):
         sys.exit("เขียนบทไม่สำเร็จ: โครงสร้างหรือความยาวบทผิดเกณฑ์ ลองกดรันใหม่")
-    if not srcs:
-        sys.exit("เขียนบทไม่สำเร็จ: API ไม่ส่งแหล่งข้อมูลกลับมา ลองกดรันใหม่")
-    log(f"  ได้หัวข้อ: {data['title']} ({len(data['scenes'])} ฉาก, {len(srcs)} แหล่ง)")
-    return data, srcs
+    log(f"  ได้หัวข้อ: {data['title']} ({len(data['scenes'])} ฉาก)")
+    return data, [{"title": "Wikipedia: " + title_en, "uri": url}]
 
 
 def audio_duration(wav):
@@ -171,11 +277,11 @@ def snap_durations(durs, total, wav, window=1.0):
     return durs
 
 
-def tts_gemini(text, wav):
+def tts_gemini(text, model, wav):
     body = {"contents": [{"parts": [{"text": TTS_STYLE + "\n" + text}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
                                  "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": VOICE}}}}}
-    resp = call(TTS_MODEL, body)
+    resp = call(model, body)
     if not resp:
         return False
     try:
@@ -199,27 +305,36 @@ def tts_edge(text, wav):
 def make_voice(scenes):
     text = "\n".join(s["narration"].strip() for s in scenes)
     wav = "work/voice.wav"
-    log(f"[ขั้น 3] สร้างเสียงทั้งคลิปด้วย {TTS_MODEL} (เสียง {VOICE})")
-    reason = "Gemini TTS ล้มเหลว"
-    try:
-        if tts_gemini(text, wav):
-            return wav
-    except QuotaError:
-        reason = "โควตา Gemini TTS เต็ม"
-    except Exception as e:
-        log(f"  ผิดพลาด: {e}")
-    log("[ขั้น 3] ถอยไปใช้ edge-tts")
-    warnings.append(f"เสียงพากย์ใช้ edge-tts ({reason})")
+    reasons = []
+    for m in TTS_MODELS:
+        log(f"[ขั้น 3b] สร้างเสียงทั้งคลิปด้วย {m} (เสียง {VOICE})")
+        try:
+            if tts_gemini(text, m, wav):
+                if reasons:
+                    warnings.append(f"เสียงพากย์ใช้ {m} ({'; '.join(reasons)})")
+                return wav
+            reasons.append(f"{m} ล้มเหลว")
+        except QuotaError:
+            reasons.append(f"{m} โควตาเต็ม")
+        except Exception as e:
+            log(f"  ผิดพลาด: {e}")
+            reasons.append(f"{m} ผิดพลาด")
+    log("[ขั้น 3b] ถอยไปใช้ edge-tts")
+    warnings.append(f"เสียงพากย์ใช้ edge-tts ({'; '.join(reasons)})")
     tts_edge(text, wav)
     return wav
 
 
 IMG_BUDGET = 18 * 60  # วินาที เกินนี้ฉากที่เหลือใช้ภาพก่อนหน้า
+try:
+    CROP_BOTTOM = max(0.0, min(15.0, float(os.environ.get("CROP_BOTTOM", "0") or 0))) / 100
+except ValueError:
+    CROP_BOTTOM = 0.0  # ตัดขอบล่างของภาพกี่เปอร์เซ็นต์ (กรณีมีลายน้ำมุมล่าง)
 
 
 def solid_image(path):
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=0xFFE066:s=1080x1920",
-         "-frames:v", "1", path])
+         "-frames:v", "1", "-pix_fmt", "yuvj420p", path])
 
 
 def make_image(prompt, path, base_seed):
@@ -247,38 +362,45 @@ def make_clip(img, dur, i, out):
         z = f"min(zoom+{step:.6f},1.18)"
     else:
         z = f"if(eq(on,1),1.18,max(zoom-{step:.6f},1.0))"
-    vf = ("scale=2160:3840:force_original_aspect_ratio=increase,crop=2160:3840,"
+    pre = f"crop=iw:ih*{1 - CROP_BOTTOM:.4f}:0:0," if CROP_BOTTOM > 0 else ""
+    vf = (pre + "scale=2160:3840:force_original_aspect_ratio=increase,crop=2160:3840,"
           f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps={FPS},"
           "format=yuv420p")
     run(["ffmpeg", "-y", "-loglevel", "error", "-i", img, "-vf", vf, "-frames:v", str(frames),
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-r", str(FPS), out])
 
 
+def preflight_image():
+    # เช็กว่า Pollinations ตอบก่อนเริ่ม เพื่อไม่เสียโควตา Gemini ฟรีๆ ถ้าบริการภาพล่ม
+    for t in (1, 2):
+        try:
+            r = requests.get("https://image.pollinations.ai/prompt/" + urllib.parse.quote("a red circle on white background")
+                             + "?width=256&height=256&model=flux&nologo=true", timeout=60)
+            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image") and len(r.content) > 1000:
+                return True
+            log(f"  เช็กบริการภาพครั้งที่ {t} ล้ม: {r.status_code}")
+        except requests.RequestException as e:
+            log(f"  เช็กบริการภาพครั้งที่ {t} ล้ม: {e}")
+        time.sleep(5)
+    return False
+
+
 def main():
-    script, srcs = get_script()
-    seen, all_srcs = set(), []
-    for s in srcs:
-        if s["uri"] not in seen:
-            seen.add(s["uri"])
-            all_srcs.append(s)
+    log("[ขั้น 0] เช็กบริการสร้างภาพ")
+    if not preflight_image():
+        sys.exit("บริการสร้างภาพ (Pollinations) ไม่ตอบ หยุดก่อนใช้โควตา Gemini รอสักพักแล้วกดรันใหม่")
+
+    script, all_srcs = get_script()
     scenes = script["scenes"]
     n = len(scenes)
 
-    wav = make_voice(scenes)
-    total = audio_duration(wav)
-    weights = [max(1, len(re.sub(r"\s", "", s["narration"]))) for s in scenes]
-    durs = [total * w / sum(weights) for w in weights]
-    durs = snap_durations(durs, total, wav)
-    log(f"  เสียงยาว {total:.1f} วินาที")
-    if total < 40 or total > 90:
-        warnings.append(f"เสียงยาว {total:.0f} วินาที อยู่นอกช่วงที่ตั้งใจ (45-80 วินาที)")
-
-    clips, prev, failed = [], None, 0
+    # สร้างภาพทุกฉากก่อน (ไม่กินโควตา Gemini) ถ้าล้มเกินครึ่งให้หยุดก่อนใช้โควตาเสียง
+    imgs, prev, failed = [], None, 0
     clip_seed = random.randint(1, 10**6)
     log(f"  [seed คลิปนี้] {clip_seed}")
     t0 = time.time()
     for i, s in enumerate(scenes):
-        log(f"[ขั้น 4] ฉาก {i + 1}/{n}: ภาพ + คลิป ({durs[i]:.1f} วินาที)")
+        log(f"[ขั้น 3] ภาพฉาก {i + 1}/{n}")
         img = f"work/img{i}.jpg"
         if time.time() - t0 > IMG_BUDGET:
             ok = False
@@ -294,12 +416,27 @@ def main():
                 solid_image(img)
                 log("  ภาพล้ม ใช้พื้นสีเรียบแทน")
         prev = img
-        clip = f"work/clip{i}.mp4"
-        make_clip(img, durs[i], i, clip)
-        clips.append(clip)
-        time.sleep(3)
+        imgs.append(img)
+    if failed * 2 >= n:
+        sys.exit(f"ภาพล้ม {failed}/{n} ฉาก หยุดก่อนสร้างเสียงเพื่อรักษาโควตา รอบนี้ใช้โควตาบทไปแล้ว 1 ครั้ง")
     if failed:
         warnings.append(f"ภาพล้ม {failed} ฉาก ใช้ภาพแทน")
+
+    wav = make_voice(scenes)
+    total = audio_duration(wav)
+    weights = [max(1, len(re.sub(r"\s", "", s["narration"]))) for s in scenes]
+    durs = [total * w / sum(weights) for w in weights]
+    durs = snap_durations(durs, total, wav)
+    log(f"  เสียงยาว {total:.1f} วินาที")
+    if total < 40 or total > 100:
+        warnings.append(f"เสียงยาว {total:.0f} วินาที อยู่นอกช่วงที่ตั้งใจ (45-80 วินาที)")
+
+    clips = []
+    for i in range(n):
+        log(f"[ขั้น 4] คลิปฉาก {i + 1}/{n} ({durs[i]:.1f} วินาที)")
+        clip = f"work/clip{i}.mp4"
+        make_clip(imgs[i], durs[i], i, clip)
+        clips.append(clip)
 
     log("[ขั้น 5] ประกอบวิดีโอ")
     open("work/list.txt", "w").write("".join(f"file '{os.path.basename(c)}'\n" for c in clips))
@@ -312,11 +449,9 @@ def main():
     open("title.txt", "w", encoding="utf-8").write(title)
     lines = [f"# {title}", ""]
     lines += [f"หมวด: {NICHE}", ""]
-    warnings.append("ไม่ได้ตรวจซ้ำด้วย AI ต้องเปิดลิงก์แหล่งข้อมูลเช็กเองทุกข้อก่อนอัปโหลด")
+    warnings.append("แหล่งข้อมูลมีเพียง Wikipedia หน้าเดียว ไม่ได้ตรวจซ้ำด้วย AI ต้องเปิดลิงก์เช็กเองทุกข้อ และตรวจว่าภาพไม่มีลายน้ำ")
     lines += ["## คำเตือน", *[f"- {w}" for w in warnings], ""]
-    lines += ["## แหล่งแต่ละฉาก"]
-    lines += [f"{i + 1}. {s.get('source', '-')}" for i, s in enumerate(scenes)]
-    lines += ["", "## ลิงก์แหล่งข้อมูล (เปิดเช็กก่อนอัปโหลด)"]
+    lines += ["## ลิงก์แหล่งข้อมูล (เปิดเช็กก่อนอัปโหลด)"]
     lines += [f"- {s['title']}: {s['uri']}" for s in all_srcs]
     lines += ["", "เนื้อหานี้สร้างด้วย AI โปรดติดป้าย AI ตอนอัปโหลด"]
     open("notes.md", "w", encoding="utf-8").write("\n".join(lines))
@@ -325,4 +460,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
+
