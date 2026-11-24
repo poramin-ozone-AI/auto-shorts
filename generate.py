@@ -16,8 +16,8 @@ FPS = 30
 
 STYLE = ("hand-drawn cartoon stickman style, thick black outlines, flat bright solid colors, "
          "simple clean background, vertical 9:16, absolutely no text, no letters, no numbers")
-CHARACTER = ("the single main character is a white round-headed stickman with thick black stick limbs, "
-             "big expressive eyes and an exaggerated facial expression")
+CHARACTER = ("the single main character is a white round-headed stickman with a white and green mohawk, "
+             "thick black stick limbs, big expressive eyes and an exaggerated facial expression")
 
 WRITER = """คุณคือนักเขียนบทคลิปสั้นแนวตั้งภาษาไทยแนว "ความรู้แปลกๆ"
 ทำตามลำดับ:
@@ -60,7 +60,6 @@ __SOURCES__
 บทที่ต้องตรวจ:
 __SCRIPT__
 ตอบ JSON ล้วนๆ โครงเดิมทุกฟิลด์ เพิ่มฟิลด์ "changes" เป็นลิสต์ข้อความสั้นๆ ว่าแก้หรือตัดอะไร (ว่างได้)"""
-
 warnings = []
 os.makedirs("work", exist_ok=True)
 
@@ -223,7 +222,6 @@ def make_voice(scenes):
     warnings.append("เสียงพากย์ใช้ edge-tts (Gemini TTS ล้มเหลวหรือเกินโควตา)")
     tts_edge(text, wav)
     return wav
-
 IMG_BUDGET = 18 * 60  # วินาที เกินนี้ฉากที่เหลือใช้ภาพก่อนหน้า
 
 
@@ -232,11 +230,12 @@ def solid_image(path):
          "-frames:v", "1", path])
 
 
-def make_image(prompt, path):
+def make_image(prompt, path, base_seed):
     full = f"{STYLE}, {CHARACTER}, {prompt}"
     for t in range(1, 4):
+        seed = base_seed if t == 1 else random.randint(1, 10**6)
         url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full) +
-               f"?width=720&height=1280&model=flux&nologo=true&seed={random.randint(1, 10**6)}")
+               f"?width=720&height=1280&model=flux&nologo=true&seed={seed}")
         try:
             r = requests.get(url, timeout=90)
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("image") and len(r.content) > 5000:
@@ -284,6 +283,8 @@ def main():
         warnings.append(f"เสียงยาว {total:.0f} วินาที อยู่นอกช่วงที่ตั้งใจ (45-80 วินาที)")
 
     clips, prev, failed = [], None, 0
+    clip_seed = random.randint(1, 10**6)
+    log(f"  [seed คลิปนี้] {clip_seed}")
     t0 = time.time()
     for i, s in enumerate(scenes):
         log(f"[ขั้น 4] ฉาก {i + 1}/{n}: ภาพ + คลิป ({durs[i]:.1f} วินาที)")
@@ -292,7 +293,7 @@ def main():
             ok = False
             log("  เกินเวลาเจนภาพ ข้ามการเจนภาพ")
         else:
-            ok = make_image(s["image_prompt"], img)
+            ok = make_image(s["image_prompt"], img, clip_seed)
         if not ok:
             failed += 1
             if prev:
