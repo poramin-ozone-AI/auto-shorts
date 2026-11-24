@@ -10,7 +10,7 @@ VOICE = os.environ.get("VOICE_NAME", "").strip() or "Enceladus"
 TEXT_MODEL = "gemini-3.8-flash"
 TTS_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"]
 EDGE_VOICE = "th-TH-NiwatNeural"
-TTS_STYLE = "เล่าด้วยน้ำเสียงอยากรู้อยากเห็น กระชับ ชัดเจน เว้นจังหวะก่อนข้อเท็จจริงที่น่าทึ่งที่สุด:"
+TTS_STYLE = "พูดภาษาไทยเหมือนคนเล่าเรื่องให้เพื่อนฟัง น้ำเสียงเป็นธรรมชาติ ชัดเจนทุกคำ หนักแน่นและมีพลัง ปรับน้ำเสียงให้ตรงกับเนื้อหาแต่ละช่วง ประโยคแรกพูดกระตุ้นความสงสัย ช่วงอธิบายพูดนุ่มและชัด ตอนเจอข้อมูลที่น่าทึ่งหรือหักมุมให้เว้นจังหวะแล้วเน้นเสียง ใกล้ไคลแมกซ์เร่งจังหวะเล็กน้อย ประโยคสรุปพูดช้าและมั่นใจ ประโยคปิดพูดเป็นกันเองและอบอุ่น:"
 API = "https://generativelanguage.googleapis.com/v1beta/models/"
 FPS = 30
 
@@ -22,26 +22,39 @@ CHARACTER = ("the single main character is a white round-headed stickman with th
 WRITER = """คุณคือนักเขียนบทคลิปสั้นแนวตั้งภาษาไทยแนว "ความรู้แปลกๆ"
 ทำตามลำดับ:
 1) ใช้ Google Search ค้นข้อมูลจริงก่อน แล้วเลือกหัวข้อในหมวด: __NICHE__ (ต้องอยู่ในหมวดนี้เท่านั้น เลือกเรื่องเฉพาะเจาะจงที่ไม่ใช่เรื่องดังที่ใครๆ ก็เล่า)
-   ต้องเป็นเรื่องที่คนส่วนใหญ่ไม่รู้หรือขัดความเชื่อเดิม และห้ามซ้ำหัวข้อเหล่านี้:
+   ต้องเป็นเรื่องที่คนส่วนใหญ่ไม่รู้หรือขัดความเชื่อเดิม และห้ามซ้ำหรือใกล้เคียงหัวข้อเหล่านี้ (รวมถึงเรื่องเดียวกันที่ตั้งชื่อต่างกัน):
 __PAST__
-2) ใช้เฉพาะข้อเท็จจริงที่มีแหล่งในผลค้นหา ตัวเลขและปีต้องตรงแหล่ง ถ้านักวิชาการยังถกเถียงให้พูดว่า "นักวิทยาศาสตร์เชื่อว่า"
-3) คิดประโยคฮุกหลายแบบ (ไม่เกิน 12 คำ) แล้วเลือกแบบที่แรงที่สุดแบบเดียว
+2) ค้นรอบที่สองเพื่อยืนยันข้อเท็จจริงหลักทุกข้อ ใช้แหล่งที่น่าเชื่อถือ เช่น มหาวิทยาลัย วารสารวิชาการ พิพิธภัณฑ์ หน่วยงานรัฐ องค์กรวิทยาศาสตร์ สำนักข่าวใหญ่ ห้ามใช้บล็อก ฟอรัม เว็บถามตอบ
+   ข้อเท็จจริงที่ยืนยันไม่ได้ให้ตัดทิ้ง ตัวเลขและปีต้องตรงแหล่ง ถ้านักวิชาการยังถกเถียงให้พูดว่า "นักวิทยาศาสตร์เชื่อว่า"
+3) เลี่ยงหัวข้อ: การเมือง ศาสนา คำแนะนำทางการแพทย์ที่คนอาจเอาไปทำตาม ความรุนแรงโหดร้าย เรื่องที่พาดพิงบุคคลจริงในทางเสียหาย
+4) คิดประโยคฮุกหลายแบบ (ไม่เกิน 12 คำ) แล้วเลือกแบบที่แรงที่สุดแบบเดียว
+   รูปแบบที่ใช้ได้: คำถามที่ขัดความเชื่อ / ข้อเท็จจริงที่ฟังดูเป็นไปไม่ได้ / ผลลัพธ์ที่น่าตกใจ
+   ฮุกต้องเป็นสัญญาที่คลิปเฉลยครบ ห้ามหลอกให้รอแล้วไม่เฉลย
 โครงเรื่อง: ฉากแรกคือฮุก เข้าเรื่องทันที ไม่ทักทาย
 → ฉากกลางเฉลยทีละชั้นแบบเหตุ→ผล (ฉากที่ 2-3 ต้องมีข้อมูลใหม่หรือหักมุม)
 → ไคลแมกซ์ → ฉากสรุป 1 ประโยค
-→ ฉากปิด (ไม่เกิน 2 ประโยค ชวนกดติดตามพร้อมเหตุผล และชวนคอมเมนต์)
+→ ฉากปิด (ไม่เกิน 2 ประโยค ชวนกดติดตามพร้อมเหตุผลที่เกี่ยวกับเรื่องที่เพิ่งเล่า และชวนคอมเมนต์)
 กฎ "ครบแล้วจบ": อธิบายจนคนไม่มีพื้นฐานเข้าใจ นิยามคำยากก่อนใช้ ตอบคำถามฮุกให้ครบ ห้ามประโยคเติมหรือซ้ำ
-ภาษาพูดธรรมชาติ ห้ามอีโมจิ เขียนตัวเลข หน่วย และคำอังกฤษเป็นคำอ่านไทยทั้งหมด (เช่น "สามดวง", "กิโลเมตร", "ดีเอ็นเอ")
-จำนวนฉาก 5-14 ฉาก บทพูดแต่ละฉากยาวราว 40-110 ตัวอักษร (ประมาณ 3-6 วินาที)
+ภาษาพูดธรรมชาติ ห้ามอีโมจิ เขียนตัวเลข หน่วย และคำอังกฤษเป็นคำอ่านไทยทั้งหมด (เช่น "สามดวง", "กิโลเมตร", "ดีเอ็นเอ", "เปอร์เซ็นต์")
+บทพูดห้ามมีสัญลักษณ์ วงเล็บ หรือเครื่องหมายคำพูด เพราะระบบเสียงอ่านจะเพี้ยน
+จำนวนฉาก 8-14 ฉาก บทพูดแต่ละฉากยาวราว 50-90 ตัวอักษร บทพูดรวมทั้งคลิปยาวราว 700-1,100 ตัวอักษร (ประมาณ 45-80 วินาที) แต่ละฉากต้องเป็นประโยคที่จบสมบูรณ์ในตัวเอง เพื่อให้เสียงเว้นจังหวะระหว่างฉาก
 ถ้าหัวข้อใหญ่เกินกว่าจะจบใน 14 ฉาก ให้เล่าเฉพาะตอนที่ 1 แล้วใส่ part_note
 image_prompt เขียนเป็นภาษาอังกฤษ บรรยายเฉพาะการกระทำในฉากที่อธิบายกลไกของสิ่งที่พูด ไม่ต้องเขียนสไตล์หรือรูปร่างตัวละคร
-ฉากแรกให้เป็นภาพ action ดึงสายตา ห้ามมีตัวหนังสือ ตัวเลข ในภาพ
+แต่ละฉากต้องเขียนให้ครบในตัว (ระบุสถานที่ วัตถุ การกระทำ) เพราะภาพแต่ละฉากถูกสร้างแยกกัน
+ฉากแรกให้เป็นภาพ action ดึงสายตา
+ห้ามมีตัวหนังสือ ตัวเลขในภาพ และห้ามใส่วัตถุที่มักมีตัวหนัง เช่น ป้าย กราฟ แผนภูมิ หนังสือ หนังสือพิมพ์ จอคอมพิวเตอร์ ฉลาก ให้ใช้ภาพเปรียบเทียบแทน
+ชื่อคลิป (title) ต้องสั้น ภาษาไทย และระบุหัวข้อจริงชัดเจน (เช่น ชื่อสัตว์ ชื่อปรากฏการณ์) ห้ามตั้งชื่อกำกวม
+ช่อง source ใส่ชื่อเว็บที่พบจริงในผลค้นหาของฉากนั้น ห้ามแต่งชื่อเอง
+ทุกฉากต้องมีตัวละครสติกแมนตัวเดียวเป็นผู้กระทำ ระบุในภาพว่าสติกแมนกำลังทำอะไรกับวัตถุไหน
+ห้ามเริ่มสองฉากติดกันด้วยคำเชื่อมซ้ำ เช่น แล้ว, ดังนั้น, และ
+ฉากสรุปต้องเป็นประโยคที่คนจำได้ และห้ามพูดซ้ำคำที่ใช้ในฉากฮุก
+ห้ามใส่เครื่องหมาย " ภายในข้อความใดๆ ใน JSON
 ตอบเป็น JSON ล้วนๆ ไม่มี markdown รูปแบบ:
 {"title":"ชื่อคลิปสั้นๆ ภาษาไทย","part_note":"","scenes":[{"narration":"บทพูด","image_prompt":"English scene","source":"ชื่อเว็บที่ใช้"}]}"""
 
 CHECKER = """คุณคือผู้ตรวจข้อเท็จจริง ใช้ Google Search เทียบบทพูดด้านล่างกับแหล่งข้อมูลจริงทีละประโยค
 ส่วนที่ไม่มีแหล่งรองรับ ตัวเลข/ปีที่ไม่ตรง ให้แก้ให้ถูกหรือตัดออก (ห้ามเพิ่มข้อมูลที่ไม่มีแหล่ง)
-คงโครงเรื่อง ภาษาพูด ตัวเลขเป็นคำอ่านไทย และจำนวนฉาก 5-14 ฉากไว้
+คงโครงเรื่อง ภาษาพูด ตัวเลขเป็นคำอ่านไทย และจำนวนฉาก 8-14 ฉากไว้
 แหล่งที่พบตอนเขียนบท:
 __SOURCES__
 บทที่ต้องตรวจ:
@@ -76,6 +89,8 @@ def call(model, body, tries=4):
         if i < tries - 1:
             time.sleep(15 * (i + 1))
     return None
+
+
 def ask(prompt):
     resp = call(TEXT_MODEL, {"contents": [{"parts": [{"text": prompt}]}],
                              "tools": [{"google_search": {}}]})
@@ -99,8 +114,10 @@ def ask(prompt):
 def valid(d):
     try:
         sc = d["scenes"]
-        return (isinstance(d["title"], str) and d["title"].strip() and 5 <= len(sc) <= 14
-                and all(s["narration"].strip() and s["image_prompt"].strip() for s in sc))
+        total = sum(len(re.sub(r"\s", "", s["narration"])) for s in sc)
+        return (isinstance(d["title"], str) and d["title"].strip() and 6 <= len(sc) <= 14
+                and all(s["narration"].strip() and s["image_prompt"].strip() for s in sc)
+                and 550 <= total <= 1300)
     except Exception:
         return False
 
@@ -117,7 +134,7 @@ def get_script():
         if data and valid(data) and srcs:
             log(f"  ได้หัวข้อ: {data['title']} ({len(data['scenes'])} ฉาก, {len(srcs)} แหล่ง)")
             return data, srcs
-        log("  ไม่มีแหล่ง/โครงสร้างผิด ทิ้งหัวข้อแล้วลองใหม่")
+        log("  ไม่มีแหล่ง/โครงสร้างผิด/ความยาวบทผิดช่วง ทิ้งหัวข้อแล้วลองใหม่")
     sys.exit("เขียนบทไม่สำเร็จครบ 5 ครั้ง")
 
 
@@ -142,6 +159,31 @@ def audio_duration(wav):
     return float(out.strip())
 
 
+def find_silences(wav):
+    r = subprocess.run(["ffmpeg", "-i", wav, "-af", "silencedetect=noise=-35dB:d=0.12",
+                        "-f", "null", "-"], capture_output=True, text=True)
+    starts = [float(x) for x in re.findall(r"silence_start: ([\d.]+)", r.stderr)]
+    ends = [float(x) for x in re.findall(r"silence_end: ([\d.]+)", r.stderr)]
+    return [(s + e) / 2 for s, e in zip(starts, ends)]
+
+
+def snap_durations(durs, total, wav, window=1.0):
+    try:
+        mids = find_silences(wav)
+        bounds, acc = [], 0.0
+        for d in durs[:-1]:
+            acc += d
+            near = [m for m in mids if abs(m - acc) <= window]
+            bounds.append(min(near, key=lambda m: abs(m - acc)) if near else acc)
+        edges = [0.0] + bounds + [total]
+        out = [edges[i + 1] - edges[i] for i in range(len(durs))]
+        if all(x > 0.8 for x in out):
+            return out
+    except Exception as e:
+        log(f"  จัดจังหวะฉากไม่สำเร็จ ใช้เวลาแบบสัดส่วนตัวอักษร: {e}")
+    return durs
+
+
 def tts_gemini(text, model, wav):
     body = {"contents": [{"parts": [{"text": TTS_STYLE + "\n" + text}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
@@ -159,6 +201,8 @@ def tts_gemini(text, model, wav):
     except Exception as e:
         log(f"  แปลงเสียงไม่สำเร็จ: {e}")
         return False
+
+
 def tts_edge(text, wav):
     open("work/voice.txt", "w", encoding="utf-8").write(text)
     run(["edge-tts", "--voice", EDGE_VOICE, "--file", "work/voice.txt", "--write-media", "work/voice.mp3"])
@@ -180,6 +224,8 @@ def make_voice(scenes):
     tts_edge(text, wav)
     return wav
 
+IMG_BUDGET = 18 * 60  # วินาที เกินนี้ฉากที่เหลือใช้ภาพก่อนหน้า
+
 
 def solid_image(path):
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=0xFFE066:s=1080x1920",
@@ -190,9 +236,9 @@ def make_image(prompt, path):
     full = f"{STYLE}, {CHARACTER}, {prompt}"
     for t in range(1, 4):
         url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full) +
-               f"?width=1080&height=1920&model=flux&nologo=true&seed={random.randint(1, 10**6)}")
+               f"?width=720&height=1280&model=flux&nologo=true&seed={random.randint(1, 10**6)}")
         try:
-            r = requests.get(url, timeout=180)
+            r = requests.get(url, timeout=90)
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("image") and len(r.content) > 5000:
                 open(path, "wb").write(r.content)
                 return True
@@ -232,13 +278,22 @@ def main():
     total = audio_duration(wav)
     weights = [max(1, len(re.sub(r"\s", "", s["narration"]))) for s in scenes]
     durs = [total * w / sum(weights) for w in weights]
+    durs = snap_durations(durs, total, wav)
     log(f"  เสียงยาว {total:.1f} วินาที")
+    if total < 40 or total > 90:
+        warnings.append(f"เสียงยาว {total:.0f} วินาที อยู่นอกช่วงที่ตั้งใจ (45-80 วินาที)")
 
     clips, prev, failed = [], None, 0
+    t0 = time.time()
     for i, s in enumerate(scenes):
         log(f"[ขั้น 4] ฉาก {i + 1}/{n}: ภาพ + คลิป ({durs[i]:.1f} วินาที)")
         img = f"work/img{i}.jpg"
-        if not make_image(s["image_prompt"], img):
+        if time.time() - t0 > IMG_BUDGET:
+            ok = False
+            log("  เกินเวลาเจนภาพ ข้ามการเจนภาพ")
+        else:
+            ok = make_image(s["image_prompt"], img)
+        if not ok:
             failed += 1
             if prev:
                 img = prev
@@ -264,6 +319,7 @@ def main():
         title += f" ({script['part_note']})"
     open("title.txt", "w", encoding="utf-8").write(title)
     lines = [f"# {title}", ""]
+    lines += [f"หมวด: {NICHE}", ""]
     if warnings:
         lines += ["## คำเตือน", *[f"- {w}" for w in warnings], ""]
     lines += ["## แหล่งแต่ละฉาก"]
