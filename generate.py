@@ -2,17 +2,18 @@ import os, sys, re, json, time, base64, random, subprocess, urllib.parse
 import requests
 
 API_KEY = os.environ["GEMINI_API_KEY"]
-CATEGORIES = ["ร่างกายมนุษย์", "สัตว์", "อวกาศและดาราศาสตร์", "ประวัติศาสตร์", "ธรรมชาติและภูมิศาสตร์",
-              "ฟิสิกส์และเคมีในชีวิตประจำวัน", "สมองและจิตวิทยา", "พืชและเห็ดรา", "มหาสมุทรและสัตว์ทะเล", "เทคโนโลยีและสิ่งประดิษฐ์"]
+CATEGORIES = ["ร่างกายมนุษย์", "สัตว์", "อวกาศและดาราศาสตร์", "ประวัติศาสตร์",
+              "ธรรมชาติและภูมิศาสตร์", "สมองและจิตวิทยา", "มหาสมุทรและสัตว์ทะเล"]
 NICHE = os.environ.get("NICHE", "").strip() or random.choice(CATEGORIES)
 VOICE = os.environ.get("VOICE_NAME", "").strip() or "Enceladus"
 
 TEXT_MODEL = "gemini-3.8-flash"
-TTS_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"]
+TTS_MODEL = "gemini-3.8-flash-tts"
 EDGE_VOICE = "th-TH-NiwatNeural"
-TTS_STYLE = "พูดภาษาไทยเหมือนคนเล่าเรื่องให้เพื่อนฟัง น้ำเสียงเป็นธรรมชาติ ชัดเจนทุกคำ หนักแน่นและมีพลัง ปรับน้ำเสียงให้ตรงกับเนื้อหาแต่ละช่วง ประโยคแรกพูดกระตุ้นความสงสัย ช่วงอธิบายพูดนุ่มและชัด ตอนเจอข้อมูลที่น่าทึ่งหรือหักมุมให้เว้นจังหวะแล้วเน้นเสียง ใกล้ไคลแมกซ์เร่งจังหวะเล็กน้อย ประโยคสรุปพูดช้าและมั่นใจ ประโยคปิดพูดเป็นกันเองและอบอุ่น:"
+TTS_STYLE = "พูดภาษาไทยแบบคนเล่าเรื่องให้เพื่อนฟัง ชัดเจนทุกคำ และเว้นจังหวะก่อนข้อเท็จจริงที่น่าทึ่งที่สุด:"
 API = "https://generativelanguage.googleapis.com/v1beta/models/"
 FPS = 30
+PAST_LIMIT = 30
 
 STYLE = ("hand-drawn cartoon stickman style, thick black outlines, flat bright solid colors, "
          "simple clean background, vertical 9:16, absolutely no text, no letters, no numbers")
@@ -52,16 +53,12 @@ image_prompt เขียนเป็นภาษาอังกฤษ บรร
 ตอบเป็น JSON ล้วนๆ ไม่มี markdown รูปแบบ:
 {"title":"ชื่อคลิปสั้นๆ ภาษาไทย","part_note":"","scenes":[{"narration":"บทพูด","image_prompt":"English scene","source":"ชื่อเว็บที่ใช้"}]}"""
 
-CHECKER = """คุณคือผู้ตรวจข้อเท็จจริง ใช้ Google Search เทียบบทพูดด้านล่างกับแหล่งข้อมูลจริงทีละประโยค
-ส่วนที่ไม่มีแหล่งรองรับ ตัวเลข/ปีที่ไม่ตรง ให้แก้ให้ถูกหรือตัดออก (ห้ามเพิ่มข้อมูลที่ไม่มีแหล่ง)
-คงโครงเรื่อง ภาษาพูด ตัวเลขเป็นคำอ่านไทย และจำนวนฉาก 8-14 ฉากไว้
-แหล่งที่พบตอนเขียนบท:
-__SOURCES__
-บทที่ต้องตรวจ:
-__SCRIPT__
-ตอบ JSON ล้วนๆ โครงเดิมทุกฟิลด์ เพิ่มฟิลด์ "changes" เป็นลิสต์ข้อความสั้นๆ ว่าแก้หรือตัดอะไร (ว่างได้)"""
 warnings = []
 os.makedirs("work", exist_ok=True)
+
+
+class QuotaError(Exception):
+    pass
 
 
 def log(m):
@@ -72,21 +69,21 @@ def run(cmd):
     subprocess.run(cmd, check=True)
 
 
-def call(model, body, tries=4):
-    for i in range(tries):
-        try:
-            r = requests.post(API + model + ":generateContent",
-                              headers={"x-goog-api-key": API_KEY, "Content-Type": "application/json"},
-                              json=body, timeout=240)
-            if r.status_code == 200:
-                return r.json()
-            log(f"  [API {model}] {r.status_code}: {r.text[:300]}")
-            if r.status_code not in (429, 500, 503):
-                return None
-        except requests.RequestException as e:
-            log(f"  [API {model}] เชื่อมต่อไม่ได้: {e}")
-        if i < tries - 1:
-            time.sleep(15 * (i + 1))
+def call(model, body):
+    # ยิงครั้งเดียว ไม่ลองซ้ำ เพื่อประหยัดโควตา
+    try:
+        r = requests.post(API + model + ":generateContent",
+                          headers={"x-goog-api-key": API_KEY, "Content-Type": "application/json"},
+                          json=body, timeout=240)
+    except requests.RequestException as e:
+        log(f"  [API {model}] เชื่อมต่อไม่ได้: {e}")
+        return None
+    if r.status_code == 200:
+        return r.json()
+    if r.status_code == 429:
+        log(f"  [API {model}] 429 โควตาเต็ม")
+        raise QuotaError(model)
+    log(f"  [API {model}] {r.status_code}: {r.text[:300]}")
     return None
 
 
@@ -124,32 +121,23 @@ def valid(d):
 def get_script():
     past = ""
     if os.path.exists("past_titles.txt"):
-        past = open("past_titles.txt", encoding="utf-8").read().strip()
+        lines = [x.strip() for x in open("past_titles.txt", encoding="utf-8").read().splitlines() if x.strip()]
+        past = "\n".join(lines[:PAST_LIMIT])
     log(f"[หมวดรอบนี้] {NICHE}")
     prompt = WRITER.replace("__NICHE__", NICHE).replace("__PAST__", past or "(ยังไม่มี)")
-    for n in range(1, 6):
-        log(f"[ขั้น 1] เขียนบท รอบที่ {n}/5")
+    log("[ขั้น 1] เขียนบท (รอบเดียว)")
+    try:
         data, srcs = ask(prompt)
-        if data and valid(data) and srcs:
-            log(f"  ได้หัวข้อ: {data['title']} ({len(data['scenes'])} ฉาก, {len(srcs)} แหล่ง)")
-            return data, srcs
-        log("  ไม่มีแหล่ง/โครงสร้างผิด/ความยาวบทผิดช่วง ทิ้งหัวข้อแล้วลองใหม่")
-    sys.exit("เขียนบทไม่สำเร็จครบ 5 ครั้ง")
-
-
-def verify(script, srcs):
-    log("[ขั้น 2] ตรวจความถูกต้องชั้นที่ 2")
-    src_txt = "\n".join(f"- {s['title']} {s['uri']}" for s in srcs)
-    prompt = (CHECKER.replace("__SOURCES__", src_txt)
-              .replace("__SCRIPT__", json.dumps(script, ensure_ascii=False)))
-    data, srcs2 = ask(prompt)
-    if data and valid(data):
-        for c in data.get("changes", []):
-            log(f"  แก้: {c}")
-        return data, srcs2
-    warnings.append("การตรวจความถูกต้องชั้นที่ 2 ไม่สำเร็จ ใช้บทจากรอบแรก ต้องเช็กแหล่งเองให้ละเอียด")
-    log("  ตรวจชั้น 2 ไม่สำเร็จ ใช้บทเดิม")
-    return script, []
+    except QuotaError:
+        sys.exit("โควตา Gemini เต็ม (429) รอรีเซ็ตแล้วค่อยกดรันใหม่ ไม่ต้องแก้โค้ด")
+    if not data:
+        sys.exit("เขียนบทไม่สำเร็จ: ไม่ได้รับ JSON ที่แกะได้ ลองกดรันใหม่")
+    if not valid(data):
+        sys.exit("เขียนบทไม่สำเร็จ: โครงสร้างหรือความยาวบทผิดเกณฑ์ ลองกดรันใหม่")
+    if not srcs:
+        sys.exit("เขียนบทไม่สำเร็จ: API ไม่ส่งแหล่งข้อมูลกลับมา ลองกดรันใหม่")
+    log(f"  ได้หัวข้อ: {data['title']} ({len(data['scenes'])} ฉาก, {len(srcs)} แหล่ง)")
+    return data, srcs
 
 
 def audio_duration(wav):
@@ -183,11 +171,11 @@ def snap_durations(durs, total, wav, window=1.0):
     return durs
 
 
-def tts_gemini(text, model, wav):
+def tts_gemini(text, wav):
     body = {"contents": [{"parts": [{"text": TTS_STYLE + "\n" + text}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
                                  "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": VOICE}}}}}
-    resp = call(model, body, tries=2)
+    resp = call(TTS_MODEL, body)
     if not resp:
         return False
     try:
@@ -211,17 +199,21 @@ def tts_edge(text, wav):
 def make_voice(scenes):
     text = "\n".join(s["narration"].strip() for s in scenes)
     wav = "work/voice.wav"
-    for m in TTS_MODELS:
-        log(f"[ขั้น 3] สร้างเสียงทั้งคลิปด้วย {m} (เสียง {VOICE})")
-        try:
-            if tts_gemini(text, m, wav):
-                return wav
-        except Exception as e:
-            log(f"  ผิดพลาด: {e}")
+    log(f"[ขั้น 3] สร้างเสียงทั้งคลิปด้วย {TTS_MODEL} (เสียง {VOICE})")
+    reason = "Gemini TTS ล้มเหลว"
+    try:
+        if tts_gemini(text, wav):
+            return wav
+    except QuotaError:
+        reason = "โควตา Gemini TTS เต็ม"
+    except Exception as e:
+        log(f"  ผิดพลาด: {e}")
     log("[ขั้น 3] ถอยไปใช้ edge-tts")
-    warnings.append("เสียงพากย์ใช้ edge-tts (Gemini TTS ล้มเหลวหรือเกินโควตา)")
+    warnings.append(f"เสียงพากย์ใช้ edge-tts ({reason})")
     tts_edge(text, wav)
     return wav
+
+
 IMG_BUDGET = 18 * 60  # วินาที เกินนี้ฉากที่เหลือใช้ภาพก่อนหน้า
 
 
@@ -232,7 +224,7 @@ def solid_image(path):
 
 def make_image(prompt, path, base_seed):
     full = f"{STYLE}, {CHARACTER}, {prompt}"
-    for t in range(1, 4):
+    for t in range(1, 3):
         seed = base_seed if t == 1 else random.randint(1, 10**6)
         url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full) +
                f"?width=720&height=1280&model=flux&nologo=true&seed={seed}")
@@ -264,9 +256,8 @@ def make_clip(img, dur, i, out):
 
 def main():
     script, srcs = get_script()
-    script, srcs2 = verify(script, srcs)
     seen, all_srcs = set(), []
-    for s in srcs + srcs2:
+    for s in srcs:
         if s["uri"] not in seen:
             seen.add(s["uri"])
             all_srcs.append(s)
@@ -321,8 +312,8 @@ def main():
     open("title.txt", "w", encoding="utf-8").write(title)
     lines = [f"# {title}", ""]
     lines += [f"หมวด: {NICHE}", ""]
-    if warnings:
-        lines += ["## คำเตือน", *[f"- {w}" for w in warnings], ""]
+    warnings.append("ไม่ได้ตรวจซ้ำด้วย AI ต้องเปิดลิงก์แหล่งข้อมูลเช็กเองทุกข้อก่อนอัปโหลด")
+    lines += ["## คำเตือน", *[f"- {w}" for w in warnings], ""]
     lines += ["## แหล่งแต่ละฉาก"]
     lines += [f"{i + 1}. {s.get('source', '-')}" for i, s in enumerate(scenes)]
     lines += ["", "## ลิงก์แหล่งข้อมูล (เปิดเช็กก่อนอัปโหลด)"]
@@ -334,3 +325,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+  
