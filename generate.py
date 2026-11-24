@@ -11,6 +11,8 @@ VOICE = os.environ.get("VOICE_NAME", "").strip() or "Enceladus"
 
 TEXT_MODEL = "gemini-3.8-flash"          # เขียนบท (โควตาน้อย 20 ครั้ง/วัน ใช้ครั้งเดียวต่อคลิป)
 TOPIC_MODEL = "gemini-3.5-flash-lite"    # เลือกหัวข้อ (โควตาแยก ถ้าใช้ไม่ได้จะถอยไปใช้ TEXT_MODEL)
+# เขียนบท: ลอง 3.8 Flash ก่อน ถ้า 503/โควตาเต็ม/บทผิดเกณฑ์ ถอยไป flash-lite (ถ้าบทผิดเกณฑ์ที่ lite ลองซ้ำได้อีก 1 ครั้ง)
+WRITER_MODELS = [TEXT_MODEL, TOPIC_MODEL, TOPIC_MODEL]
 TTS_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"]
 EDGE_VOICE = "th-TH-NiwatNeural"
 TTS_STYLE = "พูดภาษาไทยแบบคนเล่าเรื่องให้เพื่อนฟัง ชัดเจนทุกคำ และเว้นจังหวะก่อนข้อเท็จจริงที่น่าทึ่งที่สุด:"
@@ -88,8 +90,9 @@ def run(cmd):
     subprocess.run(cmd, check=True)
 
 
-def call(model, body):
+def call(model, body, wait=True):
     # ลองซ้ำ 1 ครั้งเฉพาะ 5xx หรือเน็ตหลุด ส่วน 429 หยุดทันที ไม่ยิงซ้ำ
+    # wait=False: มีรุ่นสำรองรออยู่ ถ้า 5xx ให้คืนค่าทันที ไม่ต้องรอ 20 วินาที
     for attempt in (1, 2):
         try:
             r = requests.post(API + model + ":generateContent",
@@ -107,15 +110,17 @@ def call(model, body):
             log(f"  [API {model}] {r.status_code}: {r.text[:300]}")
             if r.status_code < 500:
                 return None
+        if attempt == 1 and not wait:
+            return None
         if attempt == 1:
             log("  รอ 20 วินาทีแล้วลองอีกครั้งเดียว")
             time.sleep(20)
     return None
 
 
-def ask_json(prompt, model=TEXT_MODEL):
+def ask_json(prompt, model=TEXT_MODEL, wait=True):
     resp = call(model, {"contents": [{"parts": [{"text": prompt}]}],
-                             "generationConfig": {"responseMimeType": "application/json"}})
+                             "generationConfig": {"responseMimeType": "application/json"}}, wait=wait)
     if not resp:
         return None
     try:
@@ -137,7 +142,7 @@ def ask_topic(prompt):
     quota = 0
     for tm in (TOPIC_MODEL, TEXT_MODEL):
         try:
-            data = ask_json(prompt, tm)
+            data = ask_json(prompt, tm, wait=(tm == TEXT_MODEL))
         except QuotaError:
             log(f"  {tm} โควตาเต็ม ลองรุ่นถัดไป")
             quota += 1
@@ -234,16 +239,29 @@ def get_script():
         title_en, url, text = art
         log(f"[ขั้น 2] เขียนบทจากบทความ: {title_en} ({len(text)} ตัวอักษร)")
         prompt = (WRITER.replace("__TITLE__", title_en).replace("__ARTICLE__", text))
-        data = None
-        for w in (1, 2):  # ลองเขียนซ้ำได้ 1 ครั้ง เฉพาะกรณีได้บทที่ผิดเกณฑ์ (ไม่ใช่ 429)
-            data = ask_json(prompt)
+        data, quota_hits = None, 0
+        for w, wm in enumerate(WRITER_MODELS, 1):
+            last = (w == len(WRITER_MODELS))
+            log(f"  เขียนบทครั้งที่ {w}/{len(WRITER_MODELS)} ด้วย {wm}")
+            try:
+                data = ask_json(prompt, wm, wait=last)
+            except QuotaError:
+                quota_hits += 1
+                log(f"  {wm} โควตาเต็ม ลองรุ่นถัดไป")
+                data = None
+                continue
             if data and valid(data):
+                if wm != TEXT_MODEL:
+                    warnings.append(f"บทเขียนด้วย {wm} (รุ่นสำรอง เพราะ {TEXT_MODEL} ใช้ไม่ได้หรือบทไม่ผ่านเกณฑ์) ตรวจภาษาและข้อเท็จจริงให้ละเอียด")
                 break
-            log(f"  บทรอบที่ {w} ผิดเกณฑ์หรือแกะไม่ได้" + (" ลองเขียนใหม่" if w == 1 else ""))
+            log("  ไม่ได้บท หรือบทผิดเกณฑ์" + ("" if last else " ลองรุ่นถัดไป"))
+            data = None
+        if not data and quota_hits == len(WRITER_MODELS):
+            raise QuotaError("writer")
     except QuotaError:
         sys.exit("โควตา Gemini เต็ม (429) รอรีเซ็ตแล้วค่อยกดรันใหม่ ถ้าเกิดตั้งแต่ครั้งแรกของวัน ให้เช็กหน้า aistudio.google.com/rate-limit")
     if not data:
-        sys.exit("เขียนบทไม่สำเร็จ: ไม่ได้รับ JSON ที่แกะได้ ลองกดรันใหม่")
+        sys.exit("เขียนบทไม่สำเร็จ: ทุกรุ่นไม่ตอบ (503) หรือบทผิดเกณฑ์ รอสักพักแล้วกดรันใหม่")
     if not valid(data):
         sys.exit("เขียนบทไม่สำเร็จ: โครงสร้างหรือความยาวบทผิดเกณฑ์ ลองกดรันใหม่")
     log(f"  ได้หัวข้อ: {data['title']} ({len(data['scenes'])} ฉาก)")
