@@ -1,7 +1,9 @@
 import os, sys, re, json, time, base64, random, subprocess, urllib.parse
 import requests
 
-API_KEY = os.environ["GEMINI_API_KEY"]
+API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()  # strip กันช่องว่าง/บรรทัดใหม่ติดมากับ Secret
+if not API_KEY:
+    sys.exit("ไม่พบ GEMINI_API_KEY ใน Secret (Settings > Secrets and variables > Actions)")
 CATEGORIES = ["ร่างกายมนุษย์", "สัตว์", "อวกาศและดาราศาสตร์", "ประวัติศาสตร์",
               "ธรรมชาติและภูมิศาสตร์", "สมองและจิตวิทยา", "มหาสมุทรและสัตว์ทะเล"]
 NICHE = os.environ.get("NICHE", "").strip() or random.choice(CATEGORIES)
@@ -168,6 +170,8 @@ def fetch_article(title):
         if "missing" in p or not p.get("extract"):
             continue
         text = p["extract"]
+        if re.search(r"may refer to|disambiguation", text[:400], re.I):
+            continue  # หน้าแก้ความกำกวม ใช้ไม่ได้
         cut = re.search(r"\n== ?(References|See also|External links|Notes|Further reading|Bibliography|Sources) ?==", text)
         if cut:
             text = text[:cut.start()]
@@ -460,4 +464,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
