@@ -4,6 +4,13 @@ import requests
 API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()  # strip กันช่องว่าง/บรรทัดใหม่ติดมากับ Secret
 if not API_KEY:
     sys.exit("ไม่พบ GEMINI_API_KEY ใน Secret (Settings > Secrets and variables > Actions)")
+CF_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CF_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+    sys.exit("ไม่พบ CLOUDFLARE_ACCOUNT_ID หรือ CLOUDFLARE_API_TOKEN ใน Secret (Settings > Secrets and variables > Actions)")
+CF_MODEL = "@cf/black-forest-labs/flux-1-schnell"  # โมเดลสร้างภาพของ Cloudflare Workers AI
+CF_STEPS = 4  # จำนวนรอบสร้างภาพ (ค่าสูงสุด 8) ยิ่งสูงยิ่งสวยแต่ใช้โควตามากขึ้น
+CF_PROMPT_MAX = 2000  # Cloudflare รับ prompt ได้ไม่เกิน 2048 ตัวอักษร
 CATEGORIES = ["ร่างกายมนุษย์", "สัตว์", "อวกาศและดาราศาสตร์", "ประวัติศาสตร์",
               "ธรรมชาติและภูมิศาสตร์", "สมองและจิตวิทยา", "มหาสมุทรและสัตว์ทะเล"]
 NICHE = os.environ.get("NICHE", "").strip() or random.choice(CATEGORIES)
@@ -435,7 +442,7 @@ def make_voice(scenes):
     return wav
 
 IMG_BUDGET = 25 * 60  # เกินงบเวลาให้หยุด ไม่ใช้ภาพฉากอื่นแทน
-IMG_GAP = 50  # วินาทีระหว่างคำขอภาพแต่ละครั้ง (Pollinations ฟรีกำหนดอย่างน้อย 45 วินาทีต่อ IP)
+IMG_GAP = 3  # วินาทีระหว่างคำขอภาพแต่ละครั้ง (Cloudflare ไม่ได้กำหนดช่วงห่างเหมือน Pollinations)
 try:
     CROP_BOTTOM = max(0.0, min(15.0, float(os.environ.get("CROP_BOTTOM", "0") or 0))) / 100
 except ValueError:
@@ -459,6 +466,18 @@ def img_get(url, timeout):
     _img_not_before = time.time() + IMG_GAP
     r = requests.get(url, timeout=timeout)
     return r
+
+
+def img_post(url, payload, timeout):
+    # เหมือน img_get แต่ส่งแบบ POST พร้อม token ของ Cloudflare (ไม่เขียน token ลง log)
+    global _img_not_before
+    wait = _img_not_before - time.time()
+    if wait > 0:
+        log(f"  รอ {wait:.0f} วินาที (จำกัดช่วงห่างคำขอภาพ)")
+        time.sleep(wait)
+    _img_not_before = time.time() + IMG_GAP
+    return requests.post(url, json=payload, timeout=timeout,
+                         headers={"Authorization": f"Bearer {CF_API_TOKEN}"})
 
 
 def infer_pose(scene, scene_index=0):
@@ -573,20 +592,25 @@ def compose_character(background_path, output_path, scene_index, scene=None):
 def make_image(prompt, path, base_seed, scene_index=0, scene=None):
     reserved_side = "left" if scene_index % 2 == 0 else "right"
     layout_note = f"Keep the {reserved_side} foreground visually uncluttered for the mascot; place the main story subject toward the opposite side."
-    full = f"{STYLE}, {REFERENCE_STYLE_NOTE}, {layout_note}, background scene: {prompt}"
+    prefix = f"{STYLE}, {REFERENCE_STYLE_NOTE}, {layout_note}, background scene: "
+    full = prefix + prompt[:max(200, CF_PROMPT_MAX - len(prefix))]  # ตัดเฉพาะส่วนฉาก ไม่ตัดสไตล์
     for stale in (path, path + ".ok", path + ".meta.json", path + ".meta.json.tmp", path + ".part.jpg"):
         try: os.remove(stale)
         except FileNotFoundError: pass
-    url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full) +
-           f"?width=1280&height=720&model=flux&nologo=true&seed={base_seed}")
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_MODEL}"
+    payload = {"prompt": full, "steps": CF_STEPS, "seed": int(base_seed)}
     for t in range(1, 3):
         try:
-            r = img_get(url, 90)
-            if r.status_code in (402, 403, 429):
-                raise ImageBlocked(f"HTTP {r.status_code}: บริการจำกัดหรือปฏิเสธการใช้ หยุดทันทีโดยไม่ลองซ้ำ")
-            if (r.status_code == 200 and r.headers.get("content-type", "").startswith("image") and len(r.content) > 5000):
+            r = img_post(url, payload, 120)
+            if r.status_code in (401, 402, 403, 429):
+                raise ImageBlocked(f"HTTP {r.status_code}: Cloudflare ปฏิเสธหรือโควตาหมด (เช็ก Token/Account ID หรือโควตารายวัน) หยุดทันทีโดยไม่ลองซ้ำ")
+            img_bytes = b""
+            if r.status_code == 200:
+                b64 = ((r.json().get("result") or {}).get("image") or "")
+                img_bytes = base64.b64decode(b64) if b64 else b""
+            if r.status_code == 200 and len(img_bytes) > 5000:
                 raw = path + ".part.jpg"
-                with open(raw, "wb") as f: f.write(r.content)
+                with open(raw, "wb") as f: f.write(img_bytes)
                 compose_character(raw, path, scene_index, scene)
                 os.remove(raw)
                 probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -599,7 +623,7 @@ def make_image(prompt, path, base_seed, scene_index=0, scene=None):
                 with open(path + ".ok", "w", encoding="utf-8") as f: f.write("1")
                 write_image_cache_metadata(path, scene, base_seed, scene_index)
                 return True
-            log(f"  ภาพลองที่ {t} ล้ม: HTTP {r.status_code}")
+            log(f"  ภาพลองที่ {t} ล้ม: HTTP {r.status_code} {r.text[:200]}")
         except ImageBlocked: raise
         except (requests.RequestException, OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError, RuntimeError) as e:
             log(f"  ภาพลองที่ {t} ล้ม: {e}")
@@ -750,7 +774,7 @@ def main():
     if need_img:
         log("[ขั้น 0] เช็กบริการสร้างภาพ")
         if not preflight_image():
-            sys.exit("บริการสร้างภาพ (Pollinations) ไม่ตอบหรือจำกัดการใช้ หยุดก่อนใช้โควตา Gemini รอสักพักแล้วกดรันใหม่")
+            sys.exit("บริการสร้างภาพ (Cloudflare) ไม่ตอบหรือจำกัดการใช้ หยุดก่อนใช้โควตา Gemini รอสักพักแล้วกดรันใหม่")
 
     if ck:
         script, all_srcs, clip_seed = ck["script"], ck["sources"], ck["clip_seed"]
