@@ -319,11 +319,15 @@ def tts_gemini(text, model, wav):
         raw_path = "work/voice_audio.bin"
         with open(raw_path, "wb") as f:
             f.write(audio_bytes)
+        rate = 24000
+        m_rate = re.search(r"rate=(\d{4,6})", mime)
+        if m_rate:
+            rate = int(m_rate.group(1))
         if audio_bytes[:4] == b"RIFF" or "wav" in mime:
             run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw_path, "-ar", "24000", "-ac", "1", wav])
         else:
-            run(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", "24000", "-ac", "1",
-                 "-i", raw_path, wav])
+            run(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(rate), "-ac", "1",
+                 "-i", raw_path, "-ar", "24000", wav])
         if not os.path.exists(wav) or os.path.getsize(wav) < 1000:
             raise ValueError("ไฟล์เสียงที่แปลงได้ว่างหรือเล็กผิดปกติ")
         return True
@@ -463,6 +467,7 @@ def main():
     weights = [max(1, len(re.sub(r"\s", "", s["narration"]))) for s in scenes]
     durs = [total * w / sum(weights) for w in weights]
     durs = snap_durations(durs, total, wav)
+    durs[-1] += 0.4  # กันเสียงท้ายถูกตัดจากการปัดเฟรม (-shortest จะตัดวิดีโอส่วนเกินตามเสียงเอง)
     log(f"  เสียงยาว {total:.1f} วินาที")
     if total < 40 or total > 100:
         warnings.append(f"เสียงยาว {total:.0f} วินาที อยู่นอกช่วงที่ตั้งใจ (45-80 วินาที)")
@@ -484,7 +489,7 @@ def main():
         sys.exit("ตรวจคุณภาพไม่ผ่าน: output.mp4 ไม่มีหรือมีขนาดเล็กผิดปกติ")
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries",
-         "stream=codec_type,width,height,r_frame_rate:format=duration",
+         "stream=codec_type,codec_name,pix_fmt,width,height,r_frame_rate,duration:format=duration",
          "-of", "json", "output.mp4"], capture_output=True, text=True, check=True)
     media = json.loads(probe.stdout)
     videos = [x for x in media.get("streams", []) if x.get("codec_type") == "video"]
@@ -494,9 +499,15 @@ def main():
     v = videos[0]
     if (v.get("width"), v.get("height"), v.get("r_frame_rate")) != (1080, 1920, "30/1"):
         sys.exit("ตรวจคุณภาพไม่ผ่าน: ต้องเป็น 1080x1920 / 30 FPS")
+    if v.get("codec_name") != "h264" or v.get("pix_fmt") != "yuv420p":
+        sys.exit("ตรวจคุณภาพไม่ผ่าน: วิดีโอต้องเป็น H.264 / yuv420p")
+    if audios[0].get("codec_name") != "aac":
+        sys.exit("ตรวจคุณภาพไม่ผ่าน: เสียงต้องเป็น AAC")
     duration = float(media.get("format", {}).get("duration", 0))
-    if duration < 1:
-        sys.exit("ตรวจคุณภาพไม่ผ่าน: ระยะเวลาวิดีโอผิดปกติ")
+    if not (30 <= duration <= 120):
+        sys.exit(f"ตรวจคุณภาพไม่ผ่าน: ระยะเวลา {duration:.1f}s อยู่นอกช่วง 30-120 วินาที")
+    if abs(duration - total) > 1.0:
+        sys.exit(f"ตรวจคุณภาพไม่ผ่าน: ความยาวคลิป {duration:.1f}s ไม่ตรงกับเสียง {total:.1f}s")
     log(f"[QC ผ่าน] 1080x1920 / 30 FPS / {duration:.1f}s / มีเสียง")
 
     title = script["title"].strip().replace("\n", " ")
