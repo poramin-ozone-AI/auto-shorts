@@ -18,17 +18,27 @@ class SafeTests(unittest.TestCase):
     def test_valid_nine_scenes(self):
         self.assertTrue(g.valid({"title": "ทดสอบ", "scenes": scene_set()}))
 
-    def test_reject_seven_scenes(self):
-        self.assertFalse(g.valid({"title": "ทดสอบ", "scenes": scene_set(count=7, chars=100)}))
+    def test_reject_too_few_scenes(self):
+        self.assertFalse(g.valid({"title": "ทดสอบ", "scenes": scene_set(count=3, chars=150)}))
 
-    def test_reject_fifteen_scenes(self):
-        self.assertFalse(g.valid({"title": "ทดสอบ", "scenes": scene_set(count=15, chars=50)}))
+    def test_reject_too_many_scenes(self):
+        self.assertFalse(g.valid({"title": "ทดสอบ", "scenes": scene_set(count=19, chars=40)}))
 
-    def test_reject_short_total_narration(self):
-        self.assertFalse(g.valid({"title": "ทดสอบ", "scenes": scene_set(chars=50)}))
+    def test_reject_way_too_short_narration(self):
+        self.assertFalse(g.valid({"title": "ทดสอบ", "scenes": scene_set(chars=20)}))  # 180 ตัวอักษร
 
-    def test_reject_long_total_narration(self):
-        self.assertFalse(g.valid({"title": "ทดสอบ", "scenes": scene_set(chars=125)}))
+    def test_reject_way_too_long_narration(self):
+        self.assertFalse(g.valid({"title": "ทดสอบ", "scenes": scene_set(chars=210)}))  # 1,890 ตัวอักษร
+
+    def test_accept_outside_intended_but_sane(self):
+        for d in (scene_set(count=7, chars=100), scene_set(count=15, chars=50),
+                  scene_set(chars=50), scene_set(chars=125)):
+            self.assertTrue(g.valid({"title": "ทดสอบ", "scenes": d}))
+
+    def test_soft_notes(self):
+        self.assertEqual(g.soft_notes({"scenes": scene_set()}), [])  # 9 ฉาก 765 ตัวอักษร
+        self.assertEqual(len(g.soft_notes({"scenes": scene_set(count=7, chars=50)})), 2)
+        self.assertEqual(len(g.soft_notes({"scenes": scene_set(chars=125)})), 1)
 
     def test_reject_empty_prompt(self):
         self.assertFalse(g.valid({"title": "ทดสอบ", "scenes": scene_set(prompt="")}))
@@ -58,6 +68,25 @@ def run_call(seq, wait=True):
         g.requests.post, g.time.sleep = old_post, old_sleep
 
 class MockApiTests(unittest.TestCase):
+    def setUp(self):
+        g.usage.clear()
+
+    def test_usage_counts(self):
+        run_call([FakeResp(503), FakeResp(200, {"ok": 1})])
+        self.assertEqual(g.usage["m"], {"5xx": 1, "ok": 1})
+        g.requests.post = lambda *a, **k: FakeResp(429)
+        try:
+            g.call("m2", {})
+        except g.QuotaError:
+            pass
+        self.assertEqual(g.usage["m2"], {"429": 1})
+        text = "\n".join(g.usage_lines())
+        self.assertIn("m: ส่งคำขอ 2 ครั้ง", text)
+        self.assertNotIn("DUMMY", text)
+
+    def test_usage_empty(self):
+        self.assertEqual(g.usage_lines(), ["- ไม่มีการเรียก Gemini"])
+
     def test_429_stops_immediately(self):
         old = g.requests.post
         n = []
