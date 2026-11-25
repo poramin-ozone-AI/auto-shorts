@@ -147,6 +147,7 @@ def in_tmp():
 class ImgResp:
     def __init__(self, code, headers=None, content=b""):
         self.status_code, self.headers, self.content = code, headers or {}, content
+        self.text = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else str(content)
 
 class WikiTitleTests(unittest.TestCase):
     def test_similar_title(self):
@@ -174,42 +175,164 @@ class WikiTitleTests(unittest.TestCase):
         finally:
             g.fetch_article, g.wiki_get = old_f, old_w
 
-class ImageThrottleTests(unittest.TestCase):
+MANGA = ("Shūjin Riku (囚人リク) is a Japanese manga series written and illustrated by Yuji Nishi. " + "x" * 2600)
+
+class ArticleGateTests(unittest.TestCase):
+    def _with(self, fetch, search=()):
+        old_f, old_w = g.fetch_article, g.wiki_get
+        g.fetch_article = fetch
+        g.wiki_get = lambda p: {"query": {"search": [{"title": x} for x in search]}}
+        return old_f, old_w
+
+    def test_redirect_to_unrelated_manga_rejected(self):
+        old = self._with(lambda t: ("Shūjin Riku", "https://x", MANGA))
+        try:
+            self.assertIsNone(g.find_article("Taika_meteorite_crater"))
+        finally:
+            g.fetch_article, g.wiki_get = old
+
+    def test_redirect_to_related_article_accepted(self):
+        art = ("Tardigrade", "https://x", "Tardigrades, known colloquially as water bears, are animals. " + "a" * 2600)
+        old = self._with(lambda t: art)
+        try:
+            self.assertEqual(g.find_article("Water bear"), art)
+        finally:
+            g.fetch_article, g.wiki_get = old
+
+    def test_same_title_accepted(self):
+        art = ("Mars", "https://x", "Mars is the fourth planet from the Sun. " + "a" * 2600)
+        self.assertTrue(g.article_ok("Mars", art))
+
+    def test_offtopic_types_rejected_even_if_title_matches(self):
+        for lead in ("X is a 2019 American film directed by Y.", "X is a Japanese anime series.",
+                     "X is a video game developed by Y."):
+            self.assertFalse(g.article_ok("X", ("X", "u", lead + " " + "a" * 2600)), lead)
+
+    def test_science_leads_not_rejected(self):
+        for title, lead in (("Axolotl", "The axolotl is a paedomorphic salamander."),
+                            ("Tardigrade", "Tardigrades are eight-legged micro-animals."),
+                            ("Antikythera mechanism", "The Antikythera mechanism is an ancient Greek hand-powered orrery.")):
+            self.assertTrue(g.article_ok(title, (title, "u", lead + " " + "a" * 2600)), lead)
+
+class WriterOrderTests(unittest.TestCase):
+    def test_default_lite_first_flash_last(self):
+        self.assertEqual(g.WRITER_MODELS, [g.TOPIC_MODEL, g.TOPIC_MODEL, g.TEXT_MODEL])
+
+    def test_flash_primary_switch_restores_old_order(self):
+        old = os.environ.get("WRITER_PRIMARY")
+        os.environ["WRITER_PRIMARY"] = "flash"
+        try:
+            spec2 = importlib.util.spec_from_file_location("generator2", "generate.py")
+            g2 = importlib.util.module_from_spec(spec2)
+            spec2.loader.exec_module(g2)
+            self.assertEqual(g2.WRITER_MODELS, [g2.TEXT_MODEL, g2.TOPIC_MODEL, g2.TOPIC_MODEL])
+        finally:
+            if old is None:
+                os.environ.pop("WRITER_PRIMARY", None)
+            else:
+                os.environ["WRITER_PRIMARY"] = old
+
+class CloudflareImageProviderTests(unittest.TestCase):
     def setUp(self):
-        g._img_not_before, g._consec_402 = 0.0, 0
-        self.sleeps = []
-        self.old = (g.requests.get, g.time.sleep)
-        g.time.sleep = self.sleeps.append
+        self.old = (g.CF_ACCOUNT_ID, g.CF_API_TOKEN, g.requests.post, g.time.sleep)
+        g.CF_ACCOUNT_ID, g.CF_API_TOKEN = "account-test", "token-test"
+        g.time.sleep = lambda _: None
 
     def tearDown(self):
-        g.requests.get, g.time.sleep = self.old
+        g.CF_ACCOUNT_ID, g.CF_API_TOKEN, g.requests.post, g.time.sleep = self.old
 
-    def test_two_consecutive_402_stop_and_wait_between(self):
-        g.requests.get = lambda *a, **k: ImgResp(402, {"Retry-After": "5"})
+    def test_missing_credentials_stops_without_network(self):
+        g.CF_ACCOUNT_ID, g.CF_API_TOKEN = "", ""
+        calls = []
+        g.requests.post = lambda *a, **k: calls.append(1)
         with in_tmp():
-            with self.assertRaises(g.ImageBlocked):
-                g.make_image("p", "work/img0.jpg", 1)
-        self.assertTrue(any(s >= 45 for s in self.sleeps), self.sleeps)
+            with self.assertRaises(g.ImageProviderError):
+                g.make_image("scene", "work/img0.jpg", 42, scene_set()[0])
+        self.assertEqual(calls, [])
 
-    def test_402_then_success_resets_and_writes_marker(self):
-        seq = iter([ImgResp(402), ImgResp(200, {"content-type": "image/jpeg"}, b"x" * 6000)])
-        g.requests.get = lambda *a, **k: next(seq)
+    def test_success_uses_multipart_and_writes_scene_bound_marker(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"x" * 6000
+        seen = {}
+        def fake(url, **kwargs):
+            seen.update(kwargs)
+            return ImgResp(200, {"content-type": "image/png"}, png)
+        g.requests.post = fake
+        scene = scene_set()[0]
         with in_tmp():
-            self.assertTrue(g.make_image("p", "work/img0.jpg", 1))
-            self.assertTrue(os.path.exists("work/img0.jpg.ok"))
-        self.assertEqual(g._consec_402, 0)
+            self.assertTrue(g.make_image("scene", "work/img0.jpg", 42, scene))
+            self.assertTrue(g.validate_image_file("work/img0.jpg", g.scene_fingerprint(scene)))
+            self.assertIn("files", seen)
+            self.assertEqual(seen["files"]["width"], (None, str(g.IMG_W)))
+            self.assertEqual(seen["files"]["height"], (None, str(g.IMG_H)))
+            self.assertEqual(seen["headers"]["Authorization"], "Bearer token-test")
+            self.assertFalse(g.validate_image_file("work/img0.jpg", "wrong-scene-hash"))
 
-    def test_non_402_failures_never_raise(self):
-        g.requests.get = lambda *a, **k: ImgResp(503)
+    def test_success_decodes_cloudflare_json_base64_image(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"x" * 6000
+        encoded = g.base64.b64encode(png).decode("ascii")
+        class JsonResp(ImgResp):
+            def json(self):
+                return {"success": True, "result": {"image": encoded}}
+        g.requests.post = lambda *a, **k: JsonResp(200, {"content-type": "application/json"}, b'{"result":{"image":"..."}}')
+        scene = scene_set()[0]
         with in_tmp():
-            self.assertFalse(g.make_image("p", "work/img0.jpg", 1))
+            self.assertTrue(g.make_image("scene", "work/img0.jpg", 42, scene))
+            with open("work/img0.jpg", "rb") as f:
+                self.assertEqual(f.read(), png)
+            self.assertTrue(g.validate_image_file("work/img0.jpg", g.scene_fingerprint(scene)))
 
-    def test_gap_between_requests(self):
-        g.requests.get = lambda *a, **k: ImgResp(200, {"content-type": "image/jpeg"}, b"x" * 6000)
+    def test_success_decodes_top_level_base64_image(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"x" * 6000
+        encoded = g.base64.b64encode(png).decode("ascii")
+        class JsonResp(ImgResp):
+            def json(self):
+                return {"image": encoded}
+        g.requests.post = lambda *a, **k: JsonResp(200, {"content-type": "application/json"}, b'{"image":"..."}')
         with in_tmp():
-            g.make_image("p", "work/a.jpg", 1)
-            g.make_image("p", "work/b.jpg", 1)
-        self.assertTrue(any(s >= 45 for s in self.sleeps), self.sleeps)
+            self.assertTrue(g.make_image("scene", "work/img0.jpg", 42, scene_set()[0]))
+
+    def test_bad_base64_image_is_rejected(self):
+        class JsonResp(ImgResp):
+            def json(self):
+                return {"success": True, "result": {"image": "not-valid-base64!!!"}}
+        g.requests.post = lambda *a, **k: JsonResp(200, {"content-type": "application/json"}, b'{"result":{"image":"bad"}}')
+        with in_tmp():
+            with self.assertRaises(g.ImageProviderError):
+                g.make_image("scene", "work/img0.jpg", 42, scene_set()[0])
+
+    def test_402_stops_without_retry(self):
+        calls = []
+        g.requests.post = lambda *a, **k: (calls.append(1), ImgResp(402, {}, b"quota"))[1]
+        with in_tmp():
+            with self.assertRaises(g.ImageQuotaError):
+                g.make_image("scene", "work/img0.jpg", 42, scene_set()[0])
+        self.assertEqual(len(calls), 1)
+
+    def test_429_stops_without_retry(self):
+        calls = []
+        g.requests.post = lambda *a, **k: (calls.append(1), ImgResp(429, {"Retry-After": "30"}, b"busy"))[1]
+        with in_tmp():
+            with self.assertRaises(g.ImageQuotaError):
+                g.make_image("scene", "work/img0.jpg", 42, scene_set()[0])
+        self.assertEqual(len(calls), 1)
+
+    def test_5xx_retries_once_then_succeeds(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"x" * 6000
+        calls = []
+        def fake(*a, **k):
+            calls.append(1)
+            return ImgResp(503) if len(calls) == 1 else ImgResp(200, {"content-type": "image/png"}, png)
+        g.requests.post = fake
+        with in_tmp():
+            self.assertTrue(g.make_image("scene", "work/img0.jpg", 42, scene_set()[0]))
+        self.assertEqual(len(calls), 2)
+
+    def test_bad_200_body_is_rejected(self):
+        g.requests.post = lambda *a, **k: ImgResp(200, {"content-type": "application/json"}, b"not an image" * 1000)
+        with in_tmp():
+            with self.assertRaises(g.ImageProviderError):
+                g.make_image("scene", "work/img0.jpg", 42, scene_set()[0])
+
 
 class CheckpointTests(unittest.TestCase):
     def setUp(self):
@@ -242,15 +365,41 @@ class CheckpointTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 g.load_checkpoint()
 
+    def test_checkpoint_v2_persists_image_manifest(self):
+        script = {"title": "ทดสอบ", "scenes": scene_set()}
+        images = {"0": {"scene_hash": "abc", "sha256": "def", "file": "img0.jpg"}}
+        with in_tmp():
+            g.save_checkpoint(script, [], 99, images)
+            os.environ["RESUME"] = "1"
+            ck = g.load_checkpoint()
+            self.assertEqual(ck["version"], 2)
+            self.assertEqual(ck["images"], images)
+
     def test_expired_checkpoint_exits(self):
         os.environ["RESUME"] = "1"
         with in_tmp():
             g.save_checkpoint({"title": "t", "scenes": scene_set()}, [], 1)
-            ck = json.load(open("checkpoint.json"))
+            with open("checkpoint.json", encoding="utf-8") as f:
+                ck = json.load(f)
             ck["created"] -= 13 * 3600
-            json.dump(ck, open("checkpoint.json", "w"))
+            with open("checkpoint.json", "w", encoding="utf-8") as f:
+                json.dump(ck, f)
             with self.assertRaises(SystemExit):
                 g.load_checkpoint()
+
+
+class WorkflowStaticTests(unittest.TestCase):
+    def test_create_clip_step_passes_all_required_secrets(self):
+        with open(".github/workflows/make-short.yml", encoding="utf-8") as f:
+            workflow = f.read()
+        start = workflow.index("      - name: สร้างคลิป")
+        end = workflow.find("\\n      - name:", start + 1)
+        step = workflow[start:] if end < 0 else workflow[start:end]
+        self.assertIn("GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}", step)
+        self.assertIn("CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}", step)
+        self.assertIn("CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}", step)
+        self.assertIn("run: python generate.py", step)
+        self.assertNotRegex(step, r"(?i)echo\\s+.*(?:GEMINI_API_KEY|CLOUDFLARE_API_TOKEN)")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

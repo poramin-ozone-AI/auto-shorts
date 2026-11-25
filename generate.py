@@ -1,4 +1,4 @@
-import os, sys, re, json, time, base64, random, subprocess, urllib.parse, difflib, unicodedata
+import os, sys, re, json, time, base64, random, subprocess, urllib.parse, difflib, unicodedata, hashlib
 import requests
 
 API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()  # strip กันช่องว่าง/บรรทัดใหม่ติดมากับ Secret
@@ -11,8 +11,11 @@ VOICE = os.environ.get("VOICE_NAME", "").strip() or "Enceladus"
 
 TEXT_MODEL = "gemini-3.8-flash"          # เขียนบท (โควตาน้อย 20 ครั้ง/วัน ใช้ครั้งเดียวต่อคลิป)
 TOPIC_MODEL = "gemini-3.5-flash-lite"    # เลือกหัวข้อ (โควตาแยก ถ้าใช้ไม่ได้จะถอยไปใช้ TEXT_MODEL)
-# เขียนบท: ลอง 3.8 Flash ก่อน ถ้า 503/โควตาเต็ม/บทผิดเกณฑ์ ถอยไป flash-lite (ถ้าบทผิดเกณฑ์ที่ lite ลองซ้ำได้อีก 1 ครั้ง)
-WRITER_MODELS = [TEXT_MODEL, TOPIC_MODEL, TOPIC_MODEL]
+# เขียนบท: ค่าเริ่มต้นให้ flash-lite เขียนก่อน (3.8 Flash มักตอบ 503) ถ้าบทผิดเกณฑ์ลอง lite ซ้ำ 1 ครั้ง แล้วค่อยลอง 3.8 Flash เป็นตัวสุดท้าย
+# ตั้ง Variable WRITER_PRIMARY=flash เพื่อกลับไปใช้ลำดับเดิม (3.8 Flash ก่อน)
+WRITER_PRIMARY = os.environ.get("WRITER_PRIMARY", "").strip().lower()
+WRITER_MODELS = ([TEXT_MODEL, TOPIC_MODEL, TOPIC_MODEL] if WRITER_PRIMARY == "flash"
+                 else [TOPIC_MODEL, TOPIC_MODEL, TEXT_MODEL])
 TTS_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"]
 EDGE_VOICE = "th-TH-NiwatNeural"
 TTS_STYLE = "พูดภาษาไทยแบบคนเล่าเรื่องให้เพื่อนฟัง ชัดเจนทุกคำ และเว้นจังหวะก่อนข้อเท็จจริงที่น่าทึ่งที่สุด:"
@@ -222,10 +225,36 @@ def similar_title(want, got):
     return jaccard >= 0.5 or difflib.SequenceMatcher(None, a, b).ratio() >= 0.65
 
 
+OFFTOPIC_RE = re.compile(
+    r"\b(?:is|was) (?:an?|the) [^.\n]{0,80}?\b(manga|anime|light novel|video game|(?:television|tv|web) series|film|album|song|band|footballer|actor|actress|singer)\b",
+    re.I)  # บทความประเภทสื่อบันเทิง/บุคคลบันเทิง ไม่ใช่ความรู้แปลกๆ ดูเฉพาะประโยคนำ
+
+def article_ok(want, art):
+    """Fail closed: reject unrelated redirects/search hits before spending a Gemini request."""
+    got, _, text = art
+    lead = _norm_title(text[:2500])
+    want_tokens = [t for t in _norm_title(want).split() if len(t) >= 3]
+    got_norm = _norm_title(got)
+    if not text or not want_tokens:
+        return False
+    m = OFFTOPIC_RE.search(text[:400])
+    if m:
+        log(f"  บทความ '{got}' เป็นประเภท '{m.group(1)}' ไม่ใช่ความรู้แปลกๆ ข้าม")
+        return False
+    # Exact/near-exact titles are accepted. For legitimate aliases/redirects (e.g. water bear -> tardigrade),
+    # require every meaningful token from the requested subject to appear in the article lead.
+    if similar_title(want, got):
+        return True
+    missing = [token for token in want_tokens if token not in lead]
+    if missing:
+        log(f"  บทความ '{got}' ไม่ยืนยันหัวข้อ '{want}' ในย่อหน้าแรก (ขาดคำ: {', '.join(missing)}) ข้าม")
+        return False
+    return True
+
 def find_article(title):
     try:
         art = fetch_article(title)
-        if art and len(art[2]) >= ARTICLE_MIN:
+        if art and len(art[2]) >= ARTICLE_MIN and article_ok(title, art):
             return art
         d = wiki_get({"action": "query", "list": "search", "srsearch": title, "srlimit": 5})
         for h in d.get("query", {}).get("search", []):
@@ -233,12 +262,11 @@ def find_article(title):
                 log(f"  ผลค้นหา '{h['title']}' ไม่ตรงกับหัวข้อ '{title}' ข้าม")
                 continue
             art = fetch_article(h["title"])
-            if art and len(art[2]) >= ARTICLE_MIN:
+            if art and len(art[2]) >= ARTICLE_MIN and article_ok(title, art):
                 return art
     except Exception as e:
         log(f"  ดึง Wikipedia ไม่สำเร็จ: {e}")
     return None
-
 
 # เกณฑ์บังคับ (กว้าง) กันบทเสียรูป/ระบบพัง ส่วนช่วงที่ตั้งใจ (8-14 ฉาก, 700-1,100 ตัวอักษร) เป็นแค่คำเตือน
 HARD_SCENES = (4, 18)
@@ -280,7 +308,8 @@ def soft_notes(d):
 def get_script():
     past = ""
     if os.path.exists("past_titles.txt"):
-        lines = [x.strip() for x in open("past_titles.txt", encoding="utf-8").read().splitlines() if x.strip()]
+        with open("past_titles.txt", encoding="utf-8") as f:
+            lines = [x.strip() for x in f.read().splitlines() if x.strip()]
         past = "\n".join(lines[:PAST_LIMIT])
     log(f"[หมวดรอบนี้] {NICHE}")
     avoid = []
@@ -319,7 +348,7 @@ def get_script():
             if data and valid(data):
                 warnings.extend(soft_notes(data))
                 if wm != TEXT_MODEL:
-                    warnings.append(f"บทเขียนด้วย {wm} (รุ่นสำรอง เพราะ {TEXT_MODEL} ใช้ไม่ได้หรือบทไม่ผ่านเกณฑ์) ตรวจภาษาและข้อเท็จจริงให้ละเอียด")
+                    warnings.append(f"บทเขียนด้วย {wm} ({'รุ่นสำรอง' if WRITER_PRIMARY == 'flash' else 'ตามลำดับค่าเริ่มต้น'}) ตรวจภาษาและข้อเท็จจริงให้ละเอียด")
                 break
             log("  ไม่ได้บท หรือบทผิดเกณฑ์" + ("" if last else " ลองรุ่นถัดไป"))
             data = None
@@ -374,8 +403,9 @@ def tts_gemini(text, model, wav):
     if not resp:
         return False
     try:
-        part = resp["candidates"][0]["content"]["parts"][0]
-        inline = part.get("inlineData") or part.get("inline_data")
+        parts = resp["candidates"][0]["content"]["parts"]
+        inline = next((p.get("inlineData") or p.get("inline_data") for p in parts
+                       if p.get("inlineData") or p.get("inline_data")), None)
         if not inline or not inline.get("data"):
             raise ValueError("ไม่พบข้อมูลเสียง inlineData")
         audio_bytes = base64.b64decode(inline["data"], validate=True)
@@ -401,7 +431,8 @@ def tts_gemini(text, model, wav):
 
 
 def tts_edge(text, wav):
-    open("work/voice.txt", "w", encoding="utf-8").write(text)
+    with open("work/voice.txt", "w", encoding="utf-8") as f:
+        f.write(text)
     run(["edge-tts", "--voice", EDGE_VOICE, "--file", "work/voice.txt", "--write-media", "work/voice.mp3"])
     run(["ffmpeg", "-y", "-loglevel", "error", "-i", "work/voice.mp3", "-ar", "24000", "-ac", "1", wav])
 
@@ -429,70 +460,154 @@ def make_voice(scenes):
     return wav
 
 
-IMG_BUDGET = 25 * 60  # วินาที เกินนี้ฉากที่เหลือใช้ภาพก่อนหน้า (เว้นระยะภาพละ ~50 วินาที 14 ฉากใช้ ~12 นาที)
-IMG_GAP = 50  # วินาทีระหว่างคำขอภาพแต่ละครั้ง (Pollinations ฟรีกำหนดอย่างน้อย 45 วินาทีต่อ IP)
+# Image generation: Cloudflare Workers AI (free-plan guarded by provider-side hard quota).
+# No legacy anonymous Pollinations requests: that endpoint repeatedly returned HTTP 402.
+IMG_W, IMG_H = 576, 1024
+IMG_BUDGET = 25 * 60
+MAX_SCENES_PER_RUN = 18
+CF_IMAGE_MODEL = os.environ.get("CLOUDFLARE_IMAGE_MODEL", "@cf/black-forest-labs/flux-2-klein-4b").strip()
+CF_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CF_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+CF_API_BASE = "https://api.cloudflare.com/client/v4/accounts"
 try:
     CROP_BOTTOM = max(0.0, min(15.0, float(os.environ.get("CROP_BOTTOM", "0") or 0))) / 100
 except ValueError:
-    CROP_BOTTOM = 0.0  # ตัดขอบล่างของภาพกี่เปอร์เซ็นต์ (กรณีมีลายน้ำมุมล่าง)
+    CROP_BOTTOM = 0.0
 
 
-def solid_image(path):
-    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=0xFFE066:s=1080x1920",
-         "-frames:v", "1", "-pix_fmt", "yuvj420p", path])
-
-
-class ImageBlocked(Exception):
+class ImageProviderError(Exception):
     pass
 
 
-_img_not_before = 0.0
-_consec_402 = 0
+class ImageQuotaError(ImageProviderError):
+    pass
 
 
-def img_get(url, timeout):
-    # ทุกคำขอไป Pollinations ผ่านที่นี่ เพื่อเว้นระยะตามข้อกำหนดบริการฟรี และเคารพ Retry-After เมื่อโดน 402
-    global _img_not_before
-    wait = _img_not_before - time.time()
-    if wait > 0:
-        log(f"  รอ {wait:.0f} วินาที (Pollinations ฟรีจำกัดความถี่)")
-        time.sleep(wait)
-    _img_not_before = time.time() + IMG_GAP
-    r = requests.get(url, timeout=timeout)
-    if r.status_code == 402:
+def scene_fingerprint(scene):
+    payload = "\n".join((STYLE, CHARACTER, scene.get("narration", ""), scene.get("image_prompt", "")))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _image_signature(data):
+    return (data.startswith(b"\x89PNG\r\n\x1a\n") or data.startswith(b"\xff\xd8\xff")
+            or (len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"))
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_image_file(path, expected_scene_hash=None):
+    """Check real image bytes and a scene-bound integrity marker; never trust marker existence alone."""
+    marker = path + ".ok"
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        with open(marker, encoding="utf-8") as f:
+            meta = json.load(f)
+        if len(data) < 5000 or not _image_signature(data):
+            return False
+        if meta.get("sha256") != hashlib.sha256(data).hexdigest():
+            return False
+        if expected_scene_hash and meta.get("scene_hash") != expected_scene_hash:
+            return False
+        return True
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+
+
+def validate_image_dimensions(path):
+    """Decode image metadata with FFprobe and enforce portrait 9:16 framing."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=width,height", "-of", "json", path],
+            capture_output=True, text=True, check=True)
+        streams = json.loads(result.stdout).get("streams", [])
+        if not streams:
+            return False
+        width, height = int(streams[0]["width"]), int(streams[0]["height"])
+        return width >= 256 and height >= 256 and abs((width / height) - (9 / 16)) <= 0.015
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return False
+
+
+def _write_image_and_marker(path, data, scene_hash, provider):
+    if len(data) < 5000 or not _image_signature(data):
+        raise ImageProviderError("คำตอบจากผู้ให้บริการไม่ใช่ไฟล์ภาพที่สมบูรณ์")
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+    meta = {"version": 1, "provider": provider, "scene_hash": scene_hash,
+            "sha256": hashlib.sha256(data).hexdigest(), "created": time.time()}
+    with open(path + ".ok", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+
+
+def cloudflare_image(prompt, path, seed, scene_hash):
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+        raise ImageProviderError(
+            "ยังไม่ได้ตั้ง CLOUDFLARE_ACCOUNT_ID และ CLOUDFLARE_API_TOKEN ใน GitHub Secrets; "
+            "ไม่มีการเรียก Pollinations แบบฟรีที่ไม่ใช้ Key อีกต่อไป")
+    url = f"{CF_API_BASE}/{CF_ACCOUNT_ID}/ai/run/{CF_IMAGE_MODEL}"
+    full_prompt = f"{STYLE}. {CHARACTER}. Scene action: {prompt}. One single stickman character only."
+    headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
+    data = {"prompt": full_prompt, "width": str(IMG_W), "height": str(IMG_H), "seed": str(seed)}
+    # FLUX.2 Klein REST endpoint requires multipart/form-data, even for text-to-image.
+    for attempt in (1, 2):
         try:
-            ra = int(float(r.headers.get("Retry-After", "0")))
-        except (TypeError, ValueError):
-            ra = 0
-        _img_not_before = time.time() + min(max(ra + 1, IMG_GAP), 180)
-    return r
-
-
-def make_image(prompt, path, base_seed):
-    global _consec_402
-    full = f"{STYLE}, {CHARACTER}, {prompt}"
-    for t in range(1, 3):
-        seed = base_seed if t == 1 else random.randint(1, 10**6)
-        url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full) +
-               f"?width=720&height=1280&model=flux&nologo=true&seed={seed}")
-        try:
-            r = img_get(url, 90)
-            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image") and len(r.content) > 5000:
-                open(path, "wb").write(r.content)
-                open(path + ".ok", "w").write("1")  # marker ว่าเป็นภาพจริง ใช้ตอน resume
-                _consec_402 = 0
-                return True
-            log(f"  ภาพลองที่ {t} ล้ม: {r.status_code}")
-            if r.status_code == 402:
-                _consec_402 += 1
-                if _consec_402 >= 2:
-                    raise ImageBlocked("402 ติดกัน 2 ครั้ง")
+            response = requests.post(url, headers=headers, files={k: (None, v) for k, v in data.items()}, timeout=(20, 180))
+        except requests.RequestException as exc:
+            if attempt == 1:
+                log(f"  Cloudflare เชื่อมต่อไม่ได้: {exc}; ลองอีกครั้งเดียว")
+                time.sleep(5)
+                continue
+            raise ImageProviderError(f"Cloudflare เชื่อมต่อไม่ได้: {exc}") from exc
+        if response.status_code == 200:
+            image_bytes = None
+            # FLUX.2 Klein REST responses may be JSON with result.image as Base64;
+            # also accept a direct image/* response if the endpoint returns raw bytes.
+            if _image_signature(response.content):
+                image_bytes = response.content
             else:
-                _consec_402 = 0
-        except requests.RequestException as e:
-            log(f"  ภาพลองที่ {t} ล้ม: {e}")
-            _consec_402 = 0
-    return False
+                try:
+                    payload = response.json()
+                    encoded = payload.get("result", {}).get("image")
+                    if not encoded and isinstance(payload.get("image"), str):
+                        encoded = payload["image"]
+                    if isinstance(encoded, str):
+                        if encoded.startswith("data:") and "," in encoded:
+                            encoded = encoded.split(",", 1)[1]
+                        image_bytes = base64.b64decode(encoded, validate=True)
+                except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
+                    image_bytes = None
+            if not image_bytes or not _image_signature(image_bytes):
+                raise ImageProviderError(
+                    "Cloudflare ตอบ 200 แต่ไม่พบภาพ Base64/ไฟล์ภาพที่ถูกต้อง; หยุดเพื่อไม่บันทึกไฟล์เสีย")
+            _write_image_and_marker(path, image_bytes, scene_hash, "cloudflare-workers-ai")
+            return True
+        body = response.text[:500]
+        if response.status_code in (402, 403):
+            raise ImageQuotaError(f"Cloudflare HTTP {response.status_code}: โควตา/สิทธิ์ไม่พร้อม หยุดโดยไม่ Retry ({body})")
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After", "")
+            raise ImageQuotaError(f"Cloudflare HTTP 429: ถูกจำกัดอัตราการเรียก; หยุดโดยไม่ยิงซ้ำ ({retry_after})")
+        if response.status_code >= 500 and attempt == 1:
+            log(f"  Cloudflare HTTP {response.status_code}; ลองซ้ำอีกครั้งเดียว")
+            time.sleep(5)
+            continue
+        raise ImageProviderError(f"Cloudflare HTTP {response.status_code}: {body}")
+    raise ImageProviderError("Cloudflare สร้างภาพไม่สำเร็จ")
+
+
+def make_image(prompt, path, base_seed, scene):
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+        raise ImageProviderError("ขาด Cloudflare credentials; กรุณาตั้ง Secrets ก่อนทดลอง API จริง")
+    return cloudflare_image(prompt, path, base_seed, scene_fingerprint(scene))
 
 
 def make_clip(img, dur, i, out):
@@ -510,113 +625,110 @@ def make_clip(img, dur, i, out):
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-r", str(FPS), out])
 
 
-def preflight_image():
-    # เช็กว่า Pollinations ตอบก่อนเริ่ม เพื่อไม่เสียโควตา Gemini ฟรีๆ ถ้าบริการภาพล่ม
-    for t in (1, 2):
-        try:
-            r = img_get("https://image.pollinations.ai/prompt/" + urllib.parse.quote("a red circle on white background")
-                        + "?width=256&height=256&model=flux&nologo=true", 60)
-            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image") and len(r.content) > 1000:
-                return True
-            log(f"  เช็กบริการภาพครั้งที่ {t} ล้ม: {r.status_code}")
-        except requests.RequestException as e:
-            log(f"  เช็กบริการภาพครั้งที่ {t} ล้ม: {e}")
-    return False
-
 
 CKPT = "checkpoint.json"
-CKPT_MAX_AGE = 12 * 3600  # วินาที
+CKPT_MAX_AGE = 12 * 3600
 
 
-def save_checkpoint(script, srcs, clip_seed):
-    try:
-        with open(CKPT, "w", encoding="utf-8") as f:
-            json.dump({"version": 1, "created": time.time(), "niche": NICHE, "script": script,
-                       "sources": srcs, "clip_seed": clip_seed, "warnings": list(warnings)},
-                      f, ensure_ascii=False)
-        log("  บันทึก checkpoint ของบทแล้ว")
-    except Exception as e:
-        log(f"  บันทึก checkpoint ไม่สำเร็จ: {e}")
+def save_checkpoint(script, srcs, clip_seed, images=None):
+    payload = {"version": 2, "created": time.time(), "niche": NICHE, "script": script,
+               "sources": srcs, "clip_seed": clip_seed, "images": images or {},
+               "warnings": list(warnings)}
+    tmp = CKPT + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, CKPT)
+    log("  บันทึก checkpoint แล้ว")
 
 
 def load_checkpoint():
-    # RESUME=1: ใช้บทและภาพเดิม ไม่เรียก Gemini ถ้าใช้ checkpoint ไม่ได้ให้หยุด ไม่ย้อนไปเรียก Gemini เอง
     if os.environ.get("RESUME", "").strip().lower() not in ("1", "true", "yes"):
         return None
     try:
         with open(CKPT, encoding="utf-8") as f:
             ck = json.load(f)
         age = time.time() - ck["created"]
-        if (ck.get("version") != 1 or not 0 <= age <= CKPT_MAX_AGE or not valid(ck["script"])
-                or not isinstance(ck.get("clip_seed"), int) or not isinstance(ck.get("sources"), list)):
-            raise ValueError("checkpoint เก่าเกิน 12 ชั่วโมงหรือข้อมูลไม่ถูกต้อง")
+        if (ck.get("version") != 2 or not 0 <= age <= CKPT_MAX_AGE or not valid(ck["script"])
+                or not isinstance(ck.get("clip_seed"), int) or not isinstance(ck.get("sources"), list)
+                or not isinstance(ck.get("images"), dict)):
+            raise ValueError("checkpoint เก่าหรือข้อมูลไม่ถูกต้อง (ต้องเป็น version 2)")
         return ck
     except Exception as e:
-        sys.exit(f"[resume] ใช้ checkpoint ไม่ได้ ({e}) หยุดเพื่อไม่ให้เรียก Gemini โดยไม่ตั้งใจ ให้รันแบบปกติ (ไม่ติ๊ก resume) หากต้องการเริ่มใหม่")
+        sys.exit(f"[resume] ใช้ checkpoint ไม่ได้ ({e}) หยุดเพื่อไม่ให้เรียก Gemini โดยไม่ตั้งใจ ให้รันแบบปกติหากต้องการเริ่มใหม่")
+
+
+def record_completed_image(script, index, path, images):
+    scene = script["scenes"][index]
+    fingerprint = scene_fingerprint(scene)
+    if not validate_image_file(path, fingerprint):
+        raise ImageProviderError(f"ภาพฉาก {index + 1} ไม่ผ่านการตรวจ hash/scene marker")
+    with open(path, "rb") as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    images[str(index)] = {"scene_hash": fingerprint, "sha256": digest, "file": os.path.basename(path)}
 
 
 def main():
     global NICHE
     ck = load_checkpoint()
-    need_img = ck is None or any(not os.path.exists(f"work/img{i}.jpg.ok") for i in range(len(ck["script"]["scenes"])))
-    if need_img:
-        log("[ขั้น 0] เช็กบริการสร้างภาพ")
-        if not preflight_image():
-            sys.exit("บริการสร้างภาพ (Pollinations) ไม่ตอบหรือจำกัดการใช้ หยุดก่อนใช้โควตา Gemini รอสักพักแล้วกดรันใหม่")
-
+    if ck is None and (not CF_ACCOUNT_ID or not CF_API_TOKEN):
+        sys.exit("ยังไม่ได้ตั้ง CLOUDFLARE_ACCOUNT_ID และ CLOUDFLARE_API_TOKEN; หยุดก่อนเรียก Gemini เพื่อไม่ใช้โควตาโดยเปล่าประโยชน์")
     if ck:
         script, all_srcs, clip_seed = ck["script"], ck["sources"], ck["clip_seed"]
         NICHE = ck.get("niche") or NICHE
         warnings.extend(ck.get("warnings", []))
         warnings.append("ใช้บทจาก checkpoint (resume) ไม่ได้เรียก Gemini เลือกหัวข้อ/เขียนบทใหม่")
-        log("[resume] ใช้บทและภาพเดิมจาก checkpoint ไม่เรียก Gemini เลือกหัวข้อ/เขียนบท")
+        images_state = dict(ck.get("images", {}))
+        log("[resume] ใช้บทเดิมและตรวจภาพตาม scene hash ก่อนนำกลับมาใช้")
     else:
         script, all_srcs = get_script()
         clip_seed = random.randint(1, 10**6)
-        save_checkpoint(script, all_srcs, clip_seed)
+        images_state = {}
+        save_checkpoint(script, all_srcs, clip_seed, images_state)
+
     scenes = script["scenes"]
     n = len(scenes)
-
-    # สร้างภาพทุกฉากก่อน (ไม่กินโควตา Gemini) ถ้าล้มเกินครึ่งให้หยุดก่อนใช้โควตาเสียง
-    imgs, prev, failed = [], None, 0
+    if n > MAX_SCENES_PER_RUN:
+        sys.exit(f"จำนวนฉาก {n} เกินเพดานความปลอดภัย {MAX_SCENES_PER_RUN} ฉาก")
     log(f"  [seed คลิปนี้] {clip_seed}")
     t0 = time.time()
-    for i, s in enumerate(scenes):
+    imgs = []
+    for i, scene in enumerate(scenes):
         log(f"[ขั้น 3] ภาพฉาก {i + 1}/{n}")
         img = f"work/img{i}.jpg"
-        if ck and os.path.exists(img + ".ok"):
-            ok = True
-            log("  ใช้ภาพเดิมจาก checkpoint")
-        elif time.time() - t0 > IMG_BUDGET:
-            ok = False
-            log("  เกินเวลาเจนภาพ ข้ามการเจนภาพ")
+        fingerprint = scene_fingerprint(scene)
+        saved = images_state.get(str(i), {})
+        if (saved.get("scene_hash") == fingerprint and validate_image_file(img, fingerprint)
+                and saved.get("sha256") == file_sha256(img)):
+            log("  ใช้ภาพเดิมจาก checkpoint (ตรวจ hash ผ่าน)")
         else:
+            if time.time() - t0 > IMG_BUDGET:
+                sys.exit("เกินเวลาสร้างภาพ หยุดโดยเก็บ checkpoint; รัน resume ภายหลัง")
             try:
-                ok = make_image(s["image_prompt"], img, clip_seed)
-            except ImageBlocked:
-                sys.exit("Pollinations จำกัดการใช้ (HTTP 402) ติดกัน 2 ครั้ง หยุดทันที บทและภาพที่ได้แล้วถูกบันทึกเป็น checkpoint "
-                         "รอ 10-15 นาทีแล้วรัน Workflow ใหม่โดยติ๊ก resume (จะไม่เรียก Gemini ซ้ำ)")
-        if not ok:
-            failed += 1
-            if prev:
-                img = prev
-                log("  ภาพล้ม ใช้ภาพฉากก่อนหน้าแทน")
-            else:
-                solid_image(img)
-                log("  ภาพล้ม ใช้พื้นสีเรียบแทน")
-        prev = img
+                make_image(scene["image_prompt"], img, clip_seed + i, scene)
+                record_completed_image(script, i, img, images_state)
+                save_checkpoint(script, all_srcs, clip_seed, images_state)
+            except ImageQuotaError as exc:
+                save_checkpoint(script, all_srcs, clip_seed, images_state)
+                sys.exit(f"หยุดสร้างภาพเพื่อป้องกันการใช้โควตาเกิน: {exc}")
+            except ImageProviderError as exc:
+                save_checkpoint(script, all_srcs, clip_seed, images_state)
+                sys.exit(f"สร้างภาพฉาก {i + 1} ไม่สำเร็จ: {exc}")
         imgs.append(img)
-    if failed * 2 >= n:
-        sys.exit(f"ภาพล้ม {failed}/{n} ฉาก หยุดก่อนสร้างเสียงเพื่อรักษาโควตา รอบนี้ใช้โควตาบทไปแล้ว 1 ครั้ง")
-    if failed:
-        warnings.append(f"ภาพล้ม {failed} ฉาก ใช้ภาพแทน")
+
+    # Strict fail-closed QC: every scene must have its own valid image.
+    for i, scene in enumerate(scenes):
+        if (not validate_image_file(imgs[i], scene_fingerprint(scene))
+                or not validate_image_dimensions(imgs[i])):
+            sys.exit(f"Image QC ไม่ผ่านฉาก {i + 1}: ภาพหาย/เสีย/สัดส่วนไม่ใช่ 9:16/scene hash ไม่ตรง")
 
     wav = make_voice(scenes)
     total = audio_duration(wav)
     weights = [max(1, len(re.sub(r"\s", "", s["narration"]))) for s in scenes]
     durs = [total * w / sum(weights) for w in weights]
     durs = snap_durations(durs, total, wav)
-    durs[-1] += 0.4  # กันเสียงท้ายถูกตัดจากการปัดเฟรม (-shortest จะตัดวิดีโอส่วนเกินตามเสียงเอง)
+    durs[-1] += 0.4
     log(f"  เสียงยาว {total:.1f} วินาที")
     if total < 40 or total > 100:
         warnings.append(f"เสียงยาว {total:.0f} วินาที อยู่นอกช่วงที่ตั้งใจ (45-80 วินาที)")
@@ -629,11 +741,11 @@ def main():
         clips.append(clip)
 
     log("[ขั้น 5] ประกอบวิดีโอ")
-    open("work/list.txt", "w").write("".join(f"file '{os.path.basename(c)}'\n" for c in clips))
+    with open("work/list.txt", "w", encoding="utf-8") as f:
+        f.write("".join(f"file '{os.path.basename(c)}'\n" for c in clips))
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", "work/list.txt",
          "-i", wav, "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "output.mp4"])
 
-    # Final media QC: fail closed rather than publish a broken MP4.
     if not os.path.exists("output.mp4") or os.path.getsize("output.mp4") < 100_000:
         sys.exit("ตรวจคุณภาพไม่ผ่าน: output.mp4 ไม่มีหรือมีขนาดเล็กผิดปกติ")
     probe = subprocess.run(
@@ -654,7 +766,7 @@ def main():
         sys.exit("ตรวจคุณภาพไม่ผ่าน: เสียงต้องเป็น AAC")
     duration = float(media.get("format", {}).get("duration", 0))
     if not (10 <= duration <= 175):
-        sys.exit(f"ตรวจคุณภาพไม่ผ่าน: ระยะเวลา {duration:.1f}s อยู่นอกช่วง 10-175 วินาที (Shorts ไม่เกิน 3 นาที)")
+        sys.exit(f"ตรวจคุณภาพไม่ผ่าน: ระยะเวลา {duration:.1f}s อยู่นอกช่วง 10-175 วินาที")
     if abs(duration - total) > 1.0:
         sys.exit(f"ตรวจคุณภาพไม่ผ่าน: ความยาวคลิป {duration:.1f}s ไม่ตรงกับเสียง {total:.1f}s")
     log(f"[QC ผ่าน] 1080x1920 / 30 FPS / {duration:.1f}s / มีเสียง")
@@ -662,16 +774,16 @@ def main():
     title = script["title"].strip().replace("\n", " ")
     if script.get("part_note"):
         title += f" ({script['part_note']})"
-    open("title.txt", "w", encoding="utf-8").write(title)
-    lines = [f"# {title}", ""]
-    lines += [f"หมวด: {NICHE}", ""]
-    warnings.append("แหล่งข้อมูลมีเพียง Wikipedia หน้าเดียว ไม่ได้ตรวจซ้ำด้วย AI ต้องเปิดลิงก์เช็กเองทุกข้อ และตรวจว่าภาพไม่มีลายน้ำ")
-    lines += ["## คำเตือน", *[f"- {w}" for w in warnings], ""]
-    lines += ["## การเรียก Gemini (จำนวนคำขอที่ส่งจริงรอบนี้)", *usage_lines(), ""]
-    lines += ["## ลิงก์แหล่งข้อมูล (เปิดเช็กก่อนอัปโหลด)"]
-    lines += [f"- {s['title']}: {s['uri']}" for s in all_srcs]
-    lines += ["", "เนื้อหานี้สร้างด้วย AI โปรดติดป้าย AI ตอนอัปโหลด"]
-    open("notes.md", "w", encoding="utf-8").write("\n".join(lines))
+    with open("title.txt", "w", encoding="utf-8") as f:
+        f.write(title)
+    lines = [f"# {title}", "", f"หมวด: {NICHE}", "", "## คำเตือน"]
+    lines += [f"- {w}" for w in warnings]
+    lines += ["", "## การเรียก Gemini (จำนวนคำขอที่ส่งจริงรอบนี้)", *usage_lines(), "", "## ลิงก์แหล่งข้อมูล"]
+    lines += [f"- {src['title']}: {src['uri']}" for src in all_srcs]
+    lines += ["", "ภาพทุกฉากผ่านการตรวจ marker และ SHA-256; โปรดตรวจภาพ/เสียงด้วยตนเองก่อนเผยแพร่",
+              "เนื้อหานี้สร้างด้วย AI โปรดตรวจสอบและติดป้าย AI ตามข้อกำหนด YouTube"]
+    with open("notes.md", "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
     log("เสร็จ: output.mp4")
 
 
