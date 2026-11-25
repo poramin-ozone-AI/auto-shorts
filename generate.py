@@ -1,4 +1,4 @@
-import os, sys, re, json, time, base64, random, subprocess, urllib.parse
+import os, sys, re, json, time, base64, random, subprocess, urllib.parse, difflib, unicodedata
 import requests
 
 API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()  # strip กันช่องว่าง/บรรทัดใหม่ติดมากับ Secret
@@ -205,15 +205,34 @@ def fetch_article(title):
     return None
 
 
+def _norm_title(s):
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+
+def similar_title(want, got):
+    a, b = _norm_title(want), _norm_title(got)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    ta, tb = set(a.split()), set(b.split())
+    jaccard = len(ta & tb) / len(ta | tb)
+    return jaccard >= 0.5 or difflib.SequenceMatcher(None, a, b).ratio() >= 0.65
+
+
 def find_article(title):
     try:
         art = fetch_article(title)
         if art and len(art[2]) >= ARTICLE_MIN:
             return art
-        d = wiki_get({"action": "query", "list": "search", "srsearch": title, "srlimit": 1})
-        hits = d.get("query", {}).get("search", [])
-        if hits:
-            art = fetch_article(hits[0]["title"])
+        d = wiki_get({"action": "query", "list": "search", "srsearch": title, "srlimit": 5})
+        for h in d.get("query", {}).get("search", []):
+            if not similar_title(title, h["title"]):
+                log(f"  ผลค้นหา '{h['title']}' ไม่ตรงกับหัวข้อ '{title}' ข้าม")
+                continue
+            art = fetch_article(h["title"])
             if art and len(art[2]) >= ARTICLE_MIN:
                 return art
     except Exception as e:
@@ -410,7 +429,8 @@ def make_voice(scenes):
     return wav
 
 
-IMG_BUDGET = 18 * 60  # วินาที เกินนี้ฉากที่เหลือใช้ภาพก่อนหน้า
+IMG_BUDGET = 25 * 60  # วินาที เกินนี้ฉากที่เหลือใช้ภาพก่อนหน้า (เว้นระยะภาพละ ~50 วินาที 14 ฉากใช้ ~12 นาที)
+IMG_GAP = 50  # วินาทีระหว่างคำขอภาพแต่ละครั้ง (Pollinations ฟรีกำหนดอย่างน้อย 45 วินาทีต่อ IP)
 try:
     CROP_BOTTOM = max(0.0, min(15.0, float(os.environ.get("CROP_BOTTOM", "0") or 0))) / 100
 except ValueError:
@@ -422,21 +442,56 @@ def solid_image(path):
          "-frames:v", "1", "-pix_fmt", "yuvj420p", path])
 
 
+class ImageBlocked(Exception):
+    pass
+
+
+_img_not_before = 0.0
+_consec_402 = 0
+
+
+def img_get(url, timeout):
+    # ทุกคำขอไป Pollinations ผ่านที่นี่ เพื่อเว้นระยะตามข้อกำหนดบริการฟรี และเคารพ Retry-After เมื่อโดน 402
+    global _img_not_before
+    wait = _img_not_before - time.time()
+    if wait > 0:
+        log(f"  รอ {wait:.0f} วินาที (Pollinations ฟรีจำกัดความถี่)")
+        time.sleep(wait)
+    _img_not_before = time.time() + IMG_GAP
+    r = requests.get(url, timeout=timeout)
+    if r.status_code == 402:
+        try:
+            ra = int(float(r.headers.get("Retry-After", "0")))
+        except (TypeError, ValueError):
+            ra = 0
+        _img_not_before = time.time() + min(max(ra + 1, IMG_GAP), 180)
+    return r
+
+
 def make_image(prompt, path, base_seed):
+    global _consec_402
     full = f"{STYLE}, {CHARACTER}, {prompt}"
     for t in range(1, 3):
         seed = base_seed if t == 1 else random.randint(1, 10**6)
         url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full) +
                f"?width=720&height=1280&model=flux&nologo=true&seed={seed}")
         try:
-            r = requests.get(url, timeout=90)
+            r = img_get(url, 90)
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("image") and len(r.content) > 5000:
                 open(path, "wb").write(r.content)
+                open(path + ".ok", "w").write("1")  # marker ว่าเป็นภาพจริง ใช้ตอน resume
+                _consec_402 = 0
                 return True
             log(f"  ภาพลองที่ {t} ล้ม: {r.status_code}")
+            if r.status_code == 402:
+                _consec_402 += 1
+                if _consec_402 >= 2:
+                    raise ImageBlocked("402 ติดกัน 2 ครั้ง")
+            else:
+                _consec_402 = 0
         except requests.RequestException as e:
             log(f"  ภาพลองที่ {t} ล้ม: {e}")
-        time.sleep(5 * t)
+            _consec_402 = 0
     return False
 
 
@@ -459,39 +514,88 @@ def preflight_image():
     # เช็กว่า Pollinations ตอบก่อนเริ่ม เพื่อไม่เสียโควตา Gemini ฟรีๆ ถ้าบริการภาพล่ม
     for t in (1, 2):
         try:
-            r = requests.get("https://image.pollinations.ai/prompt/" + urllib.parse.quote("a red circle on white background")
-                             + "?width=256&height=256&model=flux&nologo=true", timeout=60)
+            r = img_get("https://image.pollinations.ai/prompt/" + urllib.parse.quote("a red circle on white background")
+                        + "?width=256&height=256&model=flux&nologo=true", 60)
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("image") and len(r.content) > 1000:
                 return True
             log(f"  เช็กบริการภาพครั้งที่ {t} ล้ม: {r.status_code}")
         except requests.RequestException as e:
             log(f"  เช็กบริการภาพครั้งที่ {t} ล้ม: {e}")
-        time.sleep(5)
     return False
 
 
-def main():
-    log("[ขั้น 0] เช็กบริการสร้างภาพ")
-    if not preflight_image():
-        sys.exit("บริการสร้างภาพ (Pollinations) ไม่ตอบ หยุดก่อนใช้โควตา Gemini รอสักพักแล้วกดรันใหม่")
+CKPT = "checkpoint.json"
+CKPT_MAX_AGE = 12 * 3600  # วินาที
 
-    script, all_srcs = get_script()
+
+def save_checkpoint(script, srcs, clip_seed):
+    try:
+        with open(CKPT, "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "created": time.time(), "niche": NICHE, "script": script,
+                       "sources": srcs, "clip_seed": clip_seed, "warnings": list(warnings)},
+                      f, ensure_ascii=False)
+        log("  บันทึก checkpoint ของบทแล้ว")
+    except Exception as e:
+        log(f"  บันทึก checkpoint ไม่สำเร็จ: {e}")
+
+
+def load_checkpoint():
+    # RESUME=1: ใช้บทและภาพเดิม ไม่เรียก Gemini ถ้าใช้ checkpoint ไม่ได้ให้หยุด ไม่ย้อนไปเรียก Gemini เอง
+    if os.environ.get("RESUME", "").strip().lower() not in ("1", "true", "yes"):
+        return None
+    try:
+        with open(CKPT, encoding="utf-8") as f:
+            ck = json.load(f)
+        age = time.time() - ck["created"]
+        if (ck.get("version") != 1 or not 0 <= age <= CKPT_MAX_AGE or not valid(ck["script"])
+                or not isinstance(ck.get("clip_seed"), int) or not isinstance(ck.get("sources"), list)):
+            raise ValueError("checkpoint เก่าเกิน 12 ชั่วโมงหรือข้อมูลไม่ถูกต้อง")
+        return ck
+    except Exception as e:
+        sys.exit(f"[resume] ใช้ checkpoint ไม่ได้ ({e}) หยุดเพื่อไม่ให้เรียก Gemini โดยไม่ตั้งใจ ให้รันแบบปกติ (ไม่ติ๊ก resume) หากต้องการเริ่มใหม่")
+
+
+def main():
+    global NICHE
+    ck = load_checkpoint()
+    need_img = ck is None or any(not os.path.exists(f"work/img{i}.jpg.ok") for i in range(len(ck["script"]["scenes"])))
+    if need_img:
+        log("[ขั้น 0] เช็กบริการสร้างภาพ")
+        if not preflight_image():
+            sys.exit("บริการสร้างภาพ (Pollinations) ไม่ตอบหรือจำกัดการใช้ หยุดก่อนใช้โควตา Gemini รอสักพักแล้วกดรันใหม่")
+
+    if ck:
+        script, all_srcs, clip_seed = ck["script"], ck["sources"], ck["clip_seed"]
+        NICHE = ck.get("niche") or NICHE
+        warnings.extend(ck.get("warnings", []))
+        warnings.append("ใช้บทจาก checkpoint (resume) ไม่ได้เรียก Gemini เลือกหัวข้อ/เขียนบทใหม่")
+        log("[resume] ใช้บทและภาพเดิมจาก checkpoint ไม่เรียก Gemini เลือกหัวข้อ/เขียนบท")
+    else:
+        script, all_srcs = get_script()
+        clip_seed = random.randint(1, 10**6)
+        save_checkpoint(script, all_srcs, clip_seed)
     scenes = script["scenes"]
     n = len(scenes)
 
     # สร้างภาพทุกฉากก่อน (ไม่กินโควตา Gemini) ถ้าล้มเกินครึ่งให้หยุดก่อนใช้โควตาเสียง
     imgs, prev, failed = [], None, 0
-    clip_seed = random.randint(1, 10**6)
     log(f"  [seed คลิปนี้] {clip_seed}")
     t0 = time.time()
     for i, s in enumerate(scenes):
         log(f"[ขั้น 3] ภาพฉาก {i + 1}/{n}")
         img = f"work/img{i}.jpg"
-        if time.time() - t0 > IMG_BUDGET:
+        if ck and os.path.exists(img + ".ok"):
+            ok = True
+            log("  ใช้ภาพเดิมจาก checkpoint")
+        elif time.time() - t0 > IMG_BUDGET:
             ok = False
             log("  เกินเวลาเจนภาพ ข้ามการเจนภาพ")
         else:
-            ok = make_image(s["image_prompt"], img, clip_seed)
+            try:
+                ok = make_image(s["image_prompt"], img, clip_seed)
+            except ImageBlocked:
+                sys.exit("Pollinations จำกัดการใช้ (HTTP 402) ติดกัน 2 ครั้ง หยุดทันที บทและภาพที่ได้แล้วถูกบันทึกเป็น checkpoint "
+                         "รอ 10-15 นาทีแล้วรัน Workflow ใหม่โดยติ๊ก resume (จะไม่เรียก Gemini ซ้ำ)")
         if not ok:
             failed += 1
             if prev:
