@@ -75,7 +75,24 @@ image_prompt เขียนเป็นภาษาอังกฤษ บรร
 __ARTICLE__"""
 
 warnings = []
+usage = {}  # โมเดล -> {ผลลัพธ์: จำนวนคำขอ} สำหรับสรุปใน notes.md (ไม่มี API Key)
 os.makedirs("work", exist_ok=True)
+
+
+def count_usage(model, kind):
+    d = usage.setdefault(model, {})
+    d[kind] = d.get(kind, 0) + 1
+
+
+def usage_lines():
+    names = {"ok": "สำเร็จ", "429": "429 โควตาเต็ม", "5xx": "5xx", "4xx": "4xx อื่นๆ", "conn": "เชื่อมต่อไม่ได้"}
+    if not usage:
+        return ["- ไม่มีการเรียก Gemini"]
+    out = []
+    for m, d in usage.items():
+        detail = ", ".join(f"{names[k]} {d[k]}" for k in names if k in d)
+        out.append(f"- {m}: ส่งคำขอ {sum(d.values())} ครั้ง ({detail})")
+    return out
 
 
 class QuotaError(Exception):
@@ -100,13 +117,17 @@ def call(model, body, wait=True):
                               json=body, timeout=(15, 120))
         except requests.RequestException as e:
             log(f"  [API {model}] เชื่อมต่อไม่ได้: {e}")
+            count_usage(model, "conn")
             r = None
         if r is not None:
             if r.status_code == 200:
+                count_usage(model, "ok")
                 return r.json()
             if r.status_code == 429:
+                count_usage(model, "429")
                 log(f"  [API {model}] 429 โควตาเต็ม")
                 raise QuotaError(model)
+            count_usage(model, "5xx" if r.status_code >= 500 else "4xx")
             log(f"  [API {model}] {r.status_code}: {r.text[:300]}")
             if r.status_code < 500:
                 return None
@@ -200,18 +221,41 @@ def find_article(title):
     return None
 
 
+# เกณฑ์บังคับ (กว้าง) กันบทเสียรูป/ระบบพัง ส่วนช่วงที่ตั้งใจ (8-14 ฉาก, 700-1,100 ตัวอักษร) เป็นแค่คำเตือน
+HARD_SCENES = (4, 18)
+HARD_CHARS = (300, 1800)
+SOFT_SCENES = (8, 14)
+SOFT_CHARS = (700, 1100)
+
+
+def _total_chars(d):
+    return sum(len(re.sub(r"\s", "", s["narration"])) for s in d["scenes"])
+
+
 def valid(d):
     try:
         sc = d["scenes"]
-        total = sum(len(re.sub(r"\s", "", s["narration"])) for s in sc)
-        return (isinstance(d["title"], str) and d["title"].strip()
-                and 8 <= len(sc) <= 14
+        total = _total_chars(d)
+        return (isinstance(d["title"], str) and bool(d["title"].strip())
+                and isinstance(sc, list)
+                and HARD_SCENES[0] <= len(sc) <= HARD_SCENES[1]
                 and all(isinstance(s.get("narration"), str) and s["narration"].strip()
                         and isinstance(s.get("image_prompt"), str) and s["image_prompt"].strip()
                         for s in sc)
-                and 700 <= total <= 1100)
+                and HARD_CHARS[0] <= total <= HARD_CHARS[1])
     except Exception:
         return False
+
+
+def soft_notes(d):
+    # ผ่านเกณฑ์บังคับแล้ว แต่ออกนอกช่วงที่ตั้งใจ -> แค่เตือนใน notes.md ไม่ปฏิเสธบท
+    out = []
+    n, total = len(d["scenes"]), _total_chars(d)
+    if not SOFT_SCENES[0] <= n <= SOFT_SCENES[1]:
+        out.append(f"จำนวนฉาก {n} อยู่นอกช่วงที่ตั้งใจ ({SOFT_SCENES[0]}-{SOFT_SCENES[1]} ฉาก)")
+    if not SOFT_CHARS[0] <= total <= SOFT_CHARS[1]:
+        out.append(f"บทพากย์ {total} ตัวอักษร อยู่นอกช่วงที่ตั้งใจ ({SOFT_CHARS[0]}-{SOFT_CHARS[1]})")
+    return out
 
 
 def get_script():
@@ -254,6 +298,7 @@ def get_script():
                 data = None
                 continue
             if data and valid(data):
+                warnings.extend(soft_notes(data))
                 if wm != TEXT_MODEL:
                     warnings.append(f"บทเขียนด้วย {wm} (รุ่นสำรอง เพราะ {TEXT_MODEL} ใช้ไม่ได้หรือบทไม่ผ่านเกณฑ์) ตรวจภาษาและข้อเท็จจริงให้ละเอียด")
                 break
@@ -504,8 +549,8 @@ def main():
     if audios[0].get("codec_name") != "aac":
         sys.exit("ตรวจคุณภาพไม่ผ่าน: เสียงต้องเป็น AAC")
     duration = float(media.get("format", {}).get("duration", 0))
-    if not (30 <= duration <= 120):
-        sys.exit(f"ตรวจคุณภาพไม่ผ่าน: ระยะเวลา {duration:.1f}s อยู่นอกช่วง 30-120 วินาที")
+    if not (10 <= duration <= 175):
+        sys.exit(f"ตรวจคุณภาพไม่ผ่าน: ระยะเวลา {duration:.1f}s อยู่นอกช่วง 10-175 วินาที (Shorts ไม่เกิน 3 นาที)")
     if abs(duration - total) > 1.0:
         sys.exit(f"ตรวจคุณภาพไม่ผ่าน: ความยาวคลิป {duration:.1f}s ไม่ตรงกับเสียง {total:.1f}s")
     log(f"[QC ผ่าน] 1080x1920 / 30 FPS / {duration:.1f}s / มีเสียง")
@@ -518,6 +563,7 @@ def main():
     lines += [f"หมวด: {NICHE}", ""]
     warnings.append("แหล่งข้อมูลมีเพียง Wikipedia หน้าเดียว ไม่ได้ตรวจซ้ำด้วย AI ต้องเปิดลิงก์เช็กเองทุกข้อ และตรวจว่าภาพไม่มีลายน้ำ")
     lines += ["## คำเตือน", *[f"- {w}" for w in warnings], ""]
+    lines += ["## การเรียก Gemini (จำนวนคำขอที่ส่งจริงรอบนี้)", *usage_lines(), ""]
     lines += ["## ลิงก์แหล่งข้อมูล (เปิดเช็กก่อนอัปโหลด)"]
     lines += [f"- {s['title']}: {s['uri']}" for s in all_srcs]
     lines += ["", "เนื้อหานี้สร้างด้วย AI โปรดติดป้าย AI ตอนอัปโหลด"]
