@@ -1,66 +1,27 @@
-AUTO SHORTS AI — V3 REVIEW REPORT
-วันที่: 25 พฤศจิกายน 2026
+รายงานตรวจสอบ AUTO SHORTS AI — FINAL CANDIDATE
+วันที่: 2026-11-25
+ฐานโค้ด: auto-shorts-main.zip ที่ผู้ใช้อัปโหลดล่าสุด
 
-ขอบเขต
-- ใช้ AUTO_SHORTS_AI_MERGED_REVIEW_2026-11-25_v2.zip ที่ผู้ใช้อัปโหลดเป็นฐาน
-- ตรวจสอบไฟล์ใน ZIP และไฟล์ ORIGINAL_generate.py ที่อยู่ภายใน ZIP
-- ไม่มี Repository ต้นฉบับแยกต่างหากในไฟล์แนบครั้งนี้ จึงยังเปรียบเทียบกับ Repository ต้นฉบับเต็มชุดไม่ได้
-- ไม่เรียก Gemini, Cloudflare, Pollinations, Wikipedia หรือบริการภายนอก
-- ไม่รัน GitHub Actions, ไม่ Commit, ไม่ Push และไม่เปลี่ยน Billing
+ผลตรวจ Offline
+- python -m py_compile generate.py test_pipeline.py: ผ่าน
+- python -m unittest -q test_pipeline.py: 39 tests ผ่าน
+- ตรวจ ZIP CRC: จะบันทึกผลหลังแพ็ก ZIP
+- ไม่เรียก Gemini/Pollinations/Wikipedia/Edge TTS จริง
+- ไม่รัน GitHub Actions, ไม่สร้าง Release, ไม่ Commit และไม่ Push
 
-สิ่งที่ตรวจพบ
-1. .github/workflows/make-short.yml
-   - Step "สร้างคลิป" ส่ง GEMINI_API_KEY แล้ว
-   - แต่ไม่ได้ส่ง CLOUDFLARE_ACCOUNT_ID และ CLOUDFLARE_API_TOKEN
-   - generate.py อ่าน Environment Variables ทั้งสองตัว และ main() จะหยุดก่อนเรียก Gemini หากไม่มี credentials
-   - จึงเป็นข้อผิดพลาดจริงที่ทำให้ workflow ไม่สามารถเริ่ม pipeline ตามที่ตั้งใจ
+การแก้ไขหลัก
+- Gemini 429 หยุดทันทีในขั้นเลือกหัวข้อ/เขียนบท/TTS
+- Pollinations 402/403/429 หยุดทันที
+- ไม่ใช้ภาพผิดฉาก/ภาพสีพื้นแทนฉากที่สร้างไม่สำเร็จ
+- ตรวจภาพจริงด้วย ffprobe และ FFmpeg decode
+- Resume ตรวจ marker + SHA-256 + ขนาดไฟล์ + Scene Fingerprint + decode
+- checkpoint เขียนแบบ atomic และตรวจ schema/source ก่อน Resume
+- Workflow ไม่สร้าง Release เป็นค่าเริ่มต้น; Draft Release ต้องเลือก opt-in แยก job
+- permissions ของ job สร้างคลิปจำกัดเป็น contents: read
+- Schedule ยังคงปิด
 
-การแก้ไขใน V3
-1. .github/workflows/make-short.yml
-   - เพิ่ม CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-   - เพิ่ม CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-   - เพิ่มใน Environment ของ Step "สร้างคลิป" โดยตรง
-   - ไม่ echo หรือพิมพ์ค่า Secret ลง Log
-
-2. test_pipeline.py
-   - เพิ่ม WorkflowStaticTests ตรวจว่า Step "สร้างคลิป" ส่ง Gemini และ Cloudflare Secrets ครบ
-   - ตรวจว่ามีคำสั่ง python generate.py และไม่มีคำสั่ง echo ที่พิมพ์ Secrets
-
-3. README_TH.txt
-   - ปรับเป็น V3 และบันทึกขอบเขตการแก้ไข/ผลทดสอบ
-
-4. CHANGELOG_TH.txt
-   - เพิ่มบันทึกการแก้ไข V3 และข้อจำกัดการทดสอบ
-
-ผลทดสอบที่รันจริง
-- python -m py_compile generate.py test_pipeline.py: PASS
-- python -m unittest -v test_pipeline.py: 43/43 PASS
-- python -W error::ResourceWarning -m unittest -v test_pipeline.py: 43/43 PASS
-- PyYAML safe_load: parse ผ่าน (PyYAML ใช้ YAML 1.1 จึงแสดง key `on` เป็น boolean `True`; ไม่ใช่การตรวจด้วย GitHub actionlint)
-- ZIP integrity: ตรวจด้วย ZipFile.testzip()
-
-Cloudflare API schema ที่ตรวจจากเอกสารทางการ
-- Model ID: @cf/black-forest-labs/flux-2-klein-4b
-- ใช้ multipart/form-data
-- โมเดลระบุ output field `image` เป็น Base64 string
-- โค้ด V2 ส่ง multipart fields prompt/width/height/seed และรองรับ result.image หรือ image ใน JSON
-- เอกสารโมเดลยืนยัน multipart และ Base64 output; ยังไม่ถือว่าเป็นการทดสอบ API จริง
-
-ค่าใช้จ่ายและโควตา
-- เอกสาร Cloudflare Workers AI pricing ที่อัปเดต 18 พ.ย. 2026 ระบุ Workers Free มี 10,000 Neurons/วัน และเกินกว่านั้นต้อง Workers Paid
-- โค้ดหยุดเมื่อ HTTP 402/403/429 และจำกัดฉากสูงสุด 18 ฉาก
-- ยังไม่มีการอ่านยอด Neurons คงเหลือของบัญชีล่วงหน้าแบบอัตโนมัติ จึงไม่สามารถรับประกันโควตาคงเหลือก่อนเริ่มได้
-- ห้ามตีความผลทดสอบ Offline ว่ารับประกันไม่มีค่าใช้จ่ายจากการใช้งานจริง
-
-ข้อจำกัด/งานคงค้าง
-- ยังไม่ได้รับ Repository ต้นฉบับแยกต่างหาก จึงสร้าง V3 จาก ZIP V2 ที่แนบมา
-- ยังไม่ได้ใช้ actionlint ตรวจ Workflow
-- ยังไม่ได้ทดสอบ Cloudflare/Gemini API จริง
-- ยังไม่ได้ทดสอบคุณภาพภาพ Stickman จริง, TTS จริง หรือ Final MP4 จาก pipeline เต็ม
-- Workflow เดิมมีขั้นตอนสร้าง Draft GitHub Release; ยังไม่ได้ปรับพฤติกรรมการเผยแพร่ในรอบนี้
-- ต้องได้รับอนุญาตแยกต่างหากก่อนรัน GitHub Actions, API จริง, Commit หรือ Push
-
-สรุป
-V3 แก้ปัญหา Cloudflare Secrets ไม่ถูกส่งเข้า Step ที่เรียก generate.py และเพิ่ม Regression Test ป้องกันการเกิดซ้ำ
-ผ่าน Offline/Mock tests 43/43 และ Python Compile
-V3 ยังเป็นชุดสำหรับตรวจสอบ/ติดตั้ง ไม่ใช่หลักฐานว่าผลิตคลิปจริงสำเร็จแล้ว
+ข้อจำกัดที่ยังคงอยู่
+- ไม่สามารถตรวจโควตาคงเหลือของบัญชี Gemini/Pollinations ก่อนเรียกได้
+- ไม่ได้ทดสอบ end-to-end กับ API จริงหรือบน GitHub Actions จริง
+- ผล QC เชิงเทคนิคไม่รับรองความจริงของเนื้อหา/ความเหมาะสมของภาพ/คุณภาพเสียงเชิงบรรณาธิการ
+- Pollinations และ Edge TTS เป็นบริการภายนอก; ความพร้อมและเงื่อนไขอาจเปลี่ยนได้

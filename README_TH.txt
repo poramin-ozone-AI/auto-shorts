@@ -1,73 +1,69 @@
-AUTO SHORTS AI — ชุดปรับปรุง Offline V3
-เวอร์ชันปรับปรุง: 25 พฤศจิกายน 2026
+AUTO SHORTS AI — FINAL CANDIDATE
+================================
 
-หมายเหตุ V3:
-- แก้ Workflow step "สร้างคลิป" ให้ส่ง CLOUDFLARE_ACCOUNT_ID และ CLOUDFLARE_API_TOKEN เข้า generate.py โดยตรง
-- เพิ่ม Regression Test สำหรับตรวจ Workflow Environment
-- V3 ผ่าน Offline/Mock tests 43/43 และ Python Compile
-- ยังไม่มีการเรียก API จริง, รัน GitHub Actions, Commit หรือ Push
+วัตถุประสงค์
+- สร้าง YouTube Shorts ภาษาไทยแนวความรู้แปลก ๆ
+- คงหมวด เนื้อหา โครงเรื่อง และตัวละคร Stickman หัวกลมสีขาวผมโมฮอว์กสีขาว-เขียว ตาม prompt เดิม
+- สร้างภาพแนวตั้ง 9:16, วิดีโอ 1080x1920, 30 FPS, H.264 และเสียง AAC
 
-เป้าหมาย
-- รักษาแนวความรู้แปลก ๆ, โครงเรื่อง, ภาษาไทย, Stickman หัวกลมสีขาว ผม Mohawk สีขาว/เขียว, เส้นดำหนา และภาพแนวตั้ง 9:16
-- ผลิตคลิปให้ครบทุกฉาก ตรวจสอบได้ และหยุดอย่างปลอดภัยเมื่อบริการไม่พร้อม
-- ใช้บริการฟรีเท่านั้น และไม่อัปเกรด/เปิด Billing เพื่อให้เกิดค่าใช้จ่ายโดยไม่ได้รับอนุญาต
-
-ไฟล์
+ไฟล์สำคัญ
 - generate.py: pipeline หลัก
-- test_pipeline.py: Unit/Mock tests
-- make-short.yml: GitHub Actions workflow (ต้องวางใน .github/workflows/)
-- requirements.txt: dependencies
-- ORIGINAL_generate.py: สำเนาต้นฉบับเพื่อเปรียบเทียบ ห้ามใช้แทน generate.py โดยไม่ตรวจ diff
+- ORIGINAL_generate.py: สำเนาไฟล์ต้นฉบับจาก ZIP ที่ผู้ใช้อัปโหลด เก็บไว้เทียบย้อนหลัง ไม่ใช่ไฟล์ที่ workflow เรียกใช้
+- .github/workflows/make-short.yml: GitHub Actions แบบกดรันเอง
+- test_pipeline.py: ชุดทดสอบ Offline
+- requirements.txt: dependencies ที่ pin เวอร์ชันแล้ว
 
-การตั้งค่าก่อนทดสอบ API จริง (ยังไม่ได้ทดสอบในชุดนี้)
-1. ใช้ Cloudflare Workers Free plan เท่านั้น และอย่าเพิ่มวิธีชำระเงิน/อัปเกรด Paid plan
-2. สร้าง API Token ที่มี Workers AI Read/Write ตามเอกสาร Cloudflare
-3. ตั้ง GitHub Actions Secrets: CLOUDFLARE_ACCOUNT_ID และ CLOUDFLARE_API_TOKEN
-4. ตั้ง GEMINI_API_KEY ตามเดิม
-5. หากไม่มี Cloudflare credentials ระบบจะหยุดก่อนเรียก Gemini เพื่อไม่เสียโควตาโดยเปล่าประโยชน์
+เงื่อนไขความปลอดภัย/โควตา
+- Gemini HTTP 429: หยุดทันที ไม่ลองโมเดลสำรองต่อ
+- Gemini TTS HTTP 429: หยุดทันที ไม่ลอง TTS สำรองหรือ Edge TTS ต่อ
+- Pollinations HTTP 402/403/429: หยุดทันที ไม่ retry คำขอเดิม
+- หากภาพฉากใดสร้างไม่ได้หรือไฟล์ภาพ decode ไม่ผ่าน จะหยุดก่อนสร้างเสียง/ประกอบวิดีโอ
+- ไม่ใช้ภาพฉากก่อนหน้าแทนฉากที่ล้ม และไม่ใช้ภาพสีพื้นแทน
+- การ retry ที่ยังมีอยู่จำกัดไว้สำหรับ 5xx/เครือข่ายตามโค้ด ไม่ retry 429/402/403
+- ไม่มีการเปิด Billing หรือเปลี่ยนแผนบริการโดยโค้ด
 
-ระบบสร้างภาพ
-- Provider ที่เตรียมไว้: Cloudflare Workers AI รุ่น @cf/black-forest-labs/flux-2-klein-4b
-- ใช้ multipart/form-data ตามเอกสาร REST API, ขนาด 576x1024, Seed ต่อฉาก
-- รองรับผลลัพธ์ REST แบบ JSON result.image (Base64) และ raw image bytes; ถอดรหัสและตรวจ signature ก่อนบันทึก
-- ไม่เรียก Pollinations แบบ anonymous/ไม่มี Key อีกต่อไป เพราะเคยเกิด HTTP 402 ซ้ำ
-- HTTP 402/403/429 จะหยุดทันทีโดยไม่ Retry; HTTP 5xx และ network error ลองซ้ำได้สูงสุดอีกหนึ่งครั้ง
-- จำกัดจำนวนฉากสูงสุด 18 ฉากต่อรอบ
-- Cloudflare Workers AI Free allocation ปัจจุบันระบุ 10,000 Neurons/วัน; บน Workers Free การใช้เกินโควตาจะถูกปฏิเสธ แต่ต้องตรวจให้แน่ใจว่าบัญชียังคงเป็น Free plan และไม่มี Billing ที่อาจทำให้เกิดค่าใช้จ่าย
-- การมีโควตาฟรีไม่ได้ยืนยันว่าภาพจะมีคุณภาพหรือคงตัวละครเหมือนกัน ต้องตรวจภาพจริง
+Resume และ checkpoint
+- checkpoint.json ถูกเขียนแบบ atomic และมีอายุใช้งานสูงสุด 12 ชั่วโมง
+- เมื่อเลือก Resume ระบบจะหยุดหาก checkpoint ใช้ไม่ได้ แทนการสร้างบทใหม่โดยไม่ตั้งใจ
+- ภาพที่นำกลับมาใช้ต้องมี marker, metadata, SHA-256 ตรงกับไฟล์ และ Scene Fingerprint ต้องตรงกับ prompt/style/character/seed
+- ภาพเก่าที่มีเพียง .ok marker แต่ไม่มี metadata จะไม่ถูก reuse และต้องสร้างใหม่
+- ก่อน reuse ภาพจะตรวจ ffprobe และให้ FFmpeg decode ภาพหนึ่งเฟรม
+- GitHub Actions cache แยกตาม branch และบันทึก metadata ของภาพด้วย
 
-ความปลอดภัยของภาพและ Resume
-- ไม่มี preflight ที่สร้างภาพจริง
-- ทุกภาพต้องมีไฟล์ภาพจริงและ marker JSON ที่เก็บ SHA-256 กับ scene fingerprint
-- Resume ใช้ checkpoint version 2 เท่านั้น; checkpoint เก่า version 1 จะถูกปฏิเสธเพื่อป้องกันการนำภาพเก่ามาใช้ผิดฉาก
-- ตรวจ hash, marker และข้อมูลภาพด้วย FFprobe ก่อนประกอบคลิป
-- หากฉากใดสร้างภาพไม่สำเร็จ ระบบหยุดทันที ไม่ใช้ภาพฉากก่อนหน้า/พื้นสีแทน และไม่เรียก TTS ต่อ
-- Resume ได้ภายใน 12 ชั่วโมงตาม workflow cache; ต้องตรวจว่า cache ของ GitHub Actions ถูกกู้คืนจริง
+วิธีติดตั้ง/ตั้งค่าใน GitHub
+1. อัปโหลดไฟล์ทั้งหมดใน ZIP ไปยัง root ของ repository โดยคงโฟลเดอร์ .github/workflows ไว้
+2. ใน Settings > Secrets and variables > Actions เพิ่ม Secret ชื่อ GEMINI_API_KEY
+3. ตัวแปร NICHE, VOICE_NAME และ CROP_BOTTOM เป็น optional; หากไม่ตั้ง NICHE ระบบสุ่มจากหมวดที่กำหนด
+4. ตรวจว่ามี Actions เปิดใช้งานใน repository และตรวจข้อกำหนด/โควตาของผู้ให้บริการด้วยตนเอง
+5. ไปที่ Actions > make-short > Run workflow
+6. ครั้งแรกให้ปล่อย resume = false และ publish_draft = false
+7. เมื่อสำเร็จ ให้ดาวน์โหลด Artifact ชื่อ auto-shorts-output-... ซึ่งมี output.mp4, title.txt และ notes.md
+8. ตรวจภาพทุกฉาก ฟังเสียง และตรวจแหล่งข้อมูลก่อนอัปโหลด YouTube
 
-Wikipedia
-- ตรวจประเภทบทความและความเกี่ยวข้องก่อนส่งให้ Gemini
-- สำหรับ redirect/ชื่อบทความทางเลือก ต้องพบทุกคำสำคัญของหัวข้อในย่อหน้าแรก มิฉะนั้นปฏิเสธ
-- การตรวจแบบนี้เป็น heuristic ไม่ใช่การยืนยันความจริงเชิงวิชาการ จึงยังต้องเปิดแหล่งข้อมูลตรวจเอง
+การ Resume
+- ใช้ resume เฉพาะเมื่อรอบก่อนหน้าล้มหลังจาก checkpoint ถูกสร้าง และต้องการใช้บทเดิม
+- cache ของ checkpoint มีอายุ/การเก็บรักษาตามนโยบาย GitHub Actions; ถ้าหา checkpoint ไม่พบ ระบบจะหยุดอย่างปลอดภัย
+- ถ้าต้องการเริ่มคลิปใหม่ ให้ resume = false
 
-TTS / Video QC
-- Gemini TTS ยังคงเป็นลำดับหลักและ Edge TTS เป็น fallback
-- TTS และการประกอบ MP4 ยังไม่ได้ทดสอบกับบริการจริง
-- Final QC ตรวจ codec, resolution, FPS, audio stream และระยะเวลา
-- Image QC ตรวจไฟล์/ความละเอียด/อัตราส่วน ไม่ได้ใช้ AI vision ยืนยันความหมายของภาพ
+การสร้าง Draft Release
+- publish_draft ปิดเป็นค่าเริ่มต้น
+- หากเลือก true จะสร้าง GitHub Draft Release หลัง job สร้างคลิปผ่าน QC และอัปโหลด Artifact สำเร็จ
+- สิทธิ์ contents: write อยู่เฉพาะ job publish-draft ที่มีเงื่อนไข opt-in; job สร้างคลิปใช้ contents: read
+- ค่าเริ่มต้นไม่มีการสร้าง Release และไม่มี schedule อัตโนมัติ
 
-การทดสอบออฟไลน์
+ทดสอบแบบ Offline (ไม่เรียก Gemini/Pollinations/Wikipedia)
   python -m py_compile generate.py test_pipeline.py
   python -m unittest -v test_pipeline.py
 
-การทดสอบชุดนี้ใช้ Mock เท่านั้น ไม่เรียก Gemini, Cloudflare, Pollinations, Wikipedia หรือ GitHub Actions
+ข้อจำกัดที่ต้องเข้าใจ
+- การทดสอบ Offline ไม่ยืนยันว่า Gemini, Pollinations, Wikipedia หรือ Edge TTS จะพร้อมใช้งานหรือมีโควตาในวันที่รัน
+- การเรียก Gemini ผ่าน API key อาจอยู่ภายใต้ rate limit/เงื่อนไขบัญชีของผู้ใช้; โค้ดหยุดเมื่อได้รับ 429 แต่ไม่สามารถตรวจโควตาคงเหลือก่อนเรียกได้
+- Pollinations เป็นบริการภายนอกที่ความพร้อมใช้งาน/นโยบายอาจเปลี่ยนได้ และไม่มีการรับประกันว่าใช้ฟรีหรือให้บริการได้ตลอดเวลา
+- Preflight ภาพเป็นคำขอไปยัง Pollinations หนึ่งครั้งก่อนเริ่มขั้น Gemini และอาจนับเป็นคำขอ/ใช้ทรัพยากรของบริการ แม้เป็นเพียงการตรวจบริการ; ไม่รับประกันว่าแต่ละภาพถัดไปจะสำเร็จ
+- Edge TTS เป็น fallback เฉพาะเมื่อ Gemini TTS ล้มเหลวแบบไม่ใช่ quota error; ความพร้อมใช้งานขึ้นกับบริการภายนอก
+- QC ตรวจรูปแบบไฟล์/codec/ความละเอียด/ระยะเวลา ไม่สามารถรับรองความถูกต้องของข้อเท็จจริง ความเหมาะสมของภาพ หรือคุณภาพเสียงเชิงเนื้อหาได้
+- ยังไม่ได้ทดสอบ end-to-end กับ API จริง และไม่ได้ทดสอบบน GitHub Actions จริงในรอบจัดทำ ZIP นี้
 
-ข้อจำกัด/ความเสี่ยงที่ยังเหลือ
-- ยังไม่ได้ยืนยันว่า Cloudflare account ของผู้ใช้เป็น Workers Free plan
-- ยังไม่ได้เรียก Cloudflare จริง จึงยังไม่ยืนยัน response จริง, ภาพจริง, คุณภาพตัวละคร หรือโควตาที่ account ใช้ได้; การถอดรหัส Base64 ผ่าน Mock เท่านั้น
-- ระบบยังไม่มี image-to-image reference character asset; ความสม่ำเสมอของตัวละครยังพึ่ง prompt และ seed เป็นหลัก
-- Image QC แบบอัตโนมัติยืนยันไฟล์และสัดส่วน ไม่สามารถตัดสินว่าภาพตรงกับ narration ได้
-- Gemini 503, Gemini TTS voice compatibility, Edge TTS และ Wikipedia API ยังต้องทดสอบจริงเมื่อได้รับอนุญาต
-
-สิทธิ์การดำเนินงาน
-- อนุญาตเฉพาะการแก้ไขไฟล์ในพื้นที่ทำงานและทดสอบ Offline/Mock ตามที่ผู้ใช้อนุมัติ
-- ห้าม Commit, Push, รัน GitHub Actions หรือเรียก API จริงจนกว่าจะได้รับอนุญาตใหม่
+ความปลอดภัยของงานนี้
+- ระหว่างจัดทำรุ่นนี้ไม่มีการเรียก API ภายนอก ไม่มีการรัน GitHub Actions ไม่มีการ Commit หรือ Push
+- ไม่เปิด Billing และไม่เปลี่ยนแผน Cloudflare

@@ -1,0 +1,12 @@
+ผลทดสอบ Offline — FINAL CANDIDATE
+
+คำสั่ง:
+  python -m py_compile generate.py test_pipeline.py
+  python -m unittest -q test_pipeline.py
+
+ผลล่าสุด:
+  py_compile: PASS
+  unittest: PASS — 39 tests
+
+ไม่มีการเรียก Gemini, Pollinations, Wikipedia หรือ Edge TTS จริง
+ไม่มีการรัน GitHub Actions, สร้าง Release, Commit หรือ Push

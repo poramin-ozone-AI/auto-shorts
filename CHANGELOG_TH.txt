@@ -1,73 +1,19 @@
-AUTO SHORTS AI — รายการเปลี่ยนแปลง V3
-วันที่: 25 พฤศจิกายน 2026
+CHANGELOG — AUTO SHORTS AI
 
-V3.1) แก้ไข Workflow Environment
-- แก้ .github/workflows/make-short.yml ใน step "สร้างคลิป"
-- ส่ง CLOUDFLARE_ACCOUNT_ID และ CLOUDFLARE_API_TOKEN จาก GitHub Secrets เข้า environment ของ generate.py โดยตรง
-- คง GEMINI_API_KEY และตัวแปรตั้งค่าเดิม
-- เพิ่ม WorkflowStaticTests เพื่อป้องกันการขาด Cloudflare Secrets ใน step ดังกล่าว
-- ไม่พิมพ์ค่า Secret ลง Log
-- ไม่เปลี่ยนการเรียก API, Billing, GitHub Actions, Commit หรือ Push
+FINAL CANDIDATE — 2026-11-25
+- รวมการหยุดเมื่อ Gemini 429 และ Pollinations 402/403/429 จากชุด V3
+- หยุด TTS ทันทีเมื่อ Gemini แจ้ง quota เต็ม ไม่ fallback ไป Edge TTS ต่อ
+- หยุดเมื่อภาพฉากใดสร้างไม่สำเร็จ ไม่ใช้ภาพก่อนหน้าหรือภาพสีพื้นแทน
+- ตรวจภาพใหม่ด้วย ffprobe และ FFmpeg decode ก่อนทำเครื่องหมายสำเร็จ
+- เพิ่ม Image Cache Metadata: SHA-256, ขนาดไฟล์ และ Scene Fingerprint ที่ผูกกับ prompt/style/character/seed
+- Resume จะ reuse เฉพาะภาพที่ marker, metadata, hash, fingerprint และการ decode ผ่านครบ
+- เขียน checkpoint แบบ atomic; ถ้าบันทึก checkpoint ไม่สำเร็จจะหยุดก่อนสร้างภาพ/เสียง
+- ตรวจโครงสร้าง checkpoint และแหล่งข้อมูลก่อน Resume
+- แยก GitHub permissions: job สร้างคลิปใช้ contents: read; job สร้าง Draft Release ใช้ contents: write เฉพาะเมื่อเลือก publish_draft=true
+- เพิ่มการส่ง output เป็น Actions Artifact โดยค่าเริ่มต้นไม่สร้าง Release
+- Schedule ยังคงปิด และ cache แยกตาม branch
+- ปรับ README/คู่มือภาษาไทยและบันทึกข้อจำกัด
 
-ผลทดสอบ V3 จะบันทึกหลังรันทดสอบ Offline/Mock จริงเท่านั้น
-
-ข้อจำกัด:
-- ไม่ได้ทดสอบ Cloudflare/Gemini API จริง
-- ไม่ได้รับประกันค่าใช้จ่ายเป็นศูนย์จากการใช้งานบริการภายนอก
-- ต้องตรวจสอบโควตาและสถานะบัญชีจาก Dashboard ก่อนอนุญาตทดสอบจริง
-
----
-
-AUTO SHORTS AI — รายการเปลี่ยนแปลง Offline
-วันที่: 25 พฤศจิกายน 2026
-
-1) Image Provider
-- ยกเลิก Pollinations anonymous endpoint ที่เคยตอบ HTTP 402 ซ้ำ
-- เพิ่ม Cloudflare Workers AI FLUX.2 Klein 4B ผ่าน multipart/form-data
-- ใช้ CLOUDFLARE_ACCOUNT_ID และ CLOUDFLARE_API_TOKEN จาก GitHub Secrets
-- หากไม่มี credentials จะหยุดก่อนเรียก Gemini เพื่อไม่ใช้โควตาโดยเปล่าประโยชน์
-- 402/403/429 หยุดทันที; 5xx/network error retry ได้อีกหนึ่งครั้ง
-- ไม่เรียก API จริงในงานปรับปรุงครั้งนี้
-
-2) Image integrity / Resume
-- ลบ preflight ที่ยิงคำขอสร้างภาพจริง
-- เพิ่ม marker ที่บันทึก SHA-256, scene fingerprint และ provider
-- Checkpoint เปลี่ยนเป็น version 2 และปฏิเสธ checkpoint version 1
-- Resume ใช้ภาพเดิมเฉพาะเมื่อ scene hash และ image hash ตรงกัน
-- หากภาพฉากใดล้ม ให้หยุดทันที ไม่แทนด้วยภาพก่อนหน้าหรือพื้นสี
-
-3) Wikipedia
-- เพิ่มการตรวจความเกี่ยวข้องโดยต้องพบคำสำคัญทั้งหมดใน lead สำหรับ redirect/ชื่อทางเลือก
-- ยังคงปฏิเสธบทความสื่อบันเทิง/มังงะ/ภาพยนตร์/เกม ฯลฯ
-
-4) QC
-- ตรวจ image signature, marker, SHA-256 และ aspect ratio 9:16 ด้วย FFprobe
-- คง Final MP4 QC เดิม
-
-5) Workflow / Documentation
-- เพิ่ม Cloudflare Secrets ใน step สร้างคลิป
-- เพิ่ม checkpoint.json ใน Diagnostics Artifact
-- ปรับ README_TH.txt ให้ตรงกับข้อกำหนดใช้ฟรีและสถานะการทดสอบ
-
-ผลทดสอบออฟไลน์
-- py_compile: ผ่าน
-- Unit Tests: 39/39 ผ่าน
-- ResourceWarning-as-error: ผ่าน
-- YAML parse: ผ่าน (ตรวจด้วย PyYAML; parser YAML 1.1 แสดง key `on` เป็น boolean แต่ GitHub Actions ใช้ syntax ของ workflow ตามเดิม)
-- Synthetic FFmpeg render: ผ่าน, H.264 1080x1920 30 FPS
-- Image decode/aspect check: ผ่านกับภาพทดสอบสังเคราะห์
-
-ไม่ได้ทำ
-- ไม่เรียก Gemini API
-- ไม่เรียก Cloudflare API
-- ไม่เรียก Pollinations API
-- ไม่เรียก Wikipedia API
-- ไม่เรียก Edge TTS ภายนอก
-- ไม่รัน GitHub Actions
-- ไม่ Commit / Push
-
-ข้อจำกัด
-- ยังไม่ยืนยันว่า Cloudflare account เป็น Workers Free plan
-- ยังไม่ยืนยันคุณภาพภาพจริง/character consistency
-- Image QC ยังไม่ตรวจ semantic match ระหว่างภาพกับ narration
-- ยังไม่ยืนยัน Gemini TTS voice และ Edge TTS ในบริการจริง
+หมายเหตุ
+- ใช้ Pollinations ตาม provider ใน source ล่าสุด ไม่เปลี่ยนไปใช้ Cloudflare
+- ไม่เรียก API จริง ไม่รัน GitHub Actions ไม่ Commit/Push และไม่เปิด Billing ในขั้นตอนจัดทำ/ทดสอบนี้
