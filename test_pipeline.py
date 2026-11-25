@@ -133,5 +133,124 @@ class MockTtsTests(unittest.TestCase):
         ok, dur = self._tts("audio/L16;codec=pcm;rate=16000", rate=16000)
         self.assertTrue(ok); self.assertAlmostEqual(dur, 2.0, delta=0.1)
 
+import json, contextlib
+
+@contextlib.contextmanager
+def in_tmp():
+    d, cwd = tempfile.mkdtemp(), os.getcwd()
+    os.chdir(d); os.makedirs("work")
+    try:
+        yield d
+    finally:
+        os.chdir(cwd)
+
+class ImgResp:
+    def __init__(self, code, headers=None, content=b""):
+        self.status_code, self.headers, self.content = code, headers or {}, content
+
+class WikiTitleTests(unittest.TestCase):
+    def test_similar_title(self):
+        self.assertFalse(g.similar_title("Taika meteorite crater", "Shūjin Riku"))
+        self.assertTrue(g.similar_title("Mars", "Mars (planet)"))
+        self.assertTrue(g.similar_title("Tardigrade", "Tardigrade"))
+        self.assertTrue(g.similar_title("Taika_meteorite_crater", "Taika crater"))
+
+    def test_find_article_rejects_unrelated_search_hit(self):
+        old_f, old_w = g.fetch_article, g.wiki_get
+        g.fetch_article = lambda t: None
+        g.wiki_get = lambda p: {"query": {"search": [{"title": "Shūjin Riku"}]}}
+        try:
+            self.assertIsNone(g.find_article("Taika_meteorite_crater"))
+        finally:
+            g.fetch_article, g.wiki_get = old_f, old_w
+
+    def test_find_article_accepts_matching_search_hit(self):
+        old_f, old_w = g.fetch_article, g.wiki_get
+        art = ("Taika crater", "https://x", "a" * 2500)
+        g.fetch_article = lambda t: art if t == "Taika crater" else None
+        g.wiki_get = lambda p: {"query": {"search": [{"title": "Shūjin Riku"}, {"title": "Taika crater"}]}}
+        try:
+            self.assertEqual(g.find_article("Taika meteorite crater"), art)
+        finally:
+            g.fetch_article, g.wiki_get = old_f, old_w
+
+class ImageThrottleTests(unittest.TestCase):
+    def setUp(self):
+        g._img_not_before, g._consec_402 = 0.0, 0
+        self.sleeps = []
+        self.old = (g.requests.get, g.time.sleep)
+        g.time.sleep = self.sleeps.append
+
+    def tearDown(self):
+        g.requests.get, g.time.sleep = self.old
+
+    def test_two_consecutive_402_stop_and_wait_between(self):
+        g.requests.get = lambda *a, **k: ImgResp(402, {"Retry-After": "5"})
+        with in_tmp():
+            with self.assertRaises(g.ImageBlocked):
+                g.make_image("p", "work/img0.jpg", 1)
+        self.assertTrue(any(s >= 45 for s in self.sleeps), self.sleeps)
+
+    def test_402_then_success_resets_and_writes_marker(self):
+        seq = iter([ImgResp(402), ImgResp(200, {"content-type": "image/jpeg"}, b"x" * 6000)])
+        g.requests.get = lambda *a, **k: next(seq)
+        with in_tmp():
+            self.assertTrue(g.make_image("p", "work/img0.jpg", 1))
+            self.assertTrue(os.path.exists("work/img0.jpg.ok"))
+        self.assertEqual(g._consec_402, 0)
+
+    def test_non_402_failures_never_raise(self):
+        g.requests.get = lambda *a, **k: ImgResp(503)
+        with in_tmp():
+            self.assertFalse(g.make_image("p", "work/img0.jpg", 1))
+
+    def test_gap_between_requests(self):
+        g.requests.get = lambda *a, **k: ImgResp(200, {"content-type": "image/jpeg"}, b"x" * 6000)
+        with in_tmp():
+            g.make_image("p", "work/a.jpg", 1)
+            g.make_image("p", "work/b.jpg", 1)
+        self.assertTrue(any(s >= 45 for s in self.sleeps), self.sleeps)
+
+class CheckpointTests(unittest.TestCase):
+    def setUp(self):
+        self.old_env = os.environ.get("RESUME")
+
+    def tearDown(self):
+        if self.old_env is None:
+            os.environ.pop("RESUME", None)
+        else:
+            os.environ["RESUME"] = self.old_env
+
+    def test_roundtrip(self):
+        script = {"title": "ทดสอบ", "scenes": scene_set()}
+        with in_tmp():
+            g.save_checkpoint(script, [{"title": "t", "uri": "u"}], 123)
+            os.environ["RESUME"] = "1"
+            ck = g.load_checkpoint()
+            self.assertEqual(ck["script"], script)
+            self.assertEqual(ck["clip_seed"], 123)
+
+    def test_no_resume_flag_returns_none(self):
+        os.environ["RESUME"] = "0"
+        with in_tmp():
+            g.save_checkpoint({"title": "t", "scenes": scene_set()}, [], 1)
+            self.assertIsNone(g.load_checkpoint())
+
+    def test_resume_without_file_exits_not_calls_gemini(self):
+        os.environ["RESUME"] = "1"
+        with in_tmp():
+            with self.assertRaises(SystemExit):
+                g.load_checkpoint()
+
+    def test_expired_checkpoint_exits(self):
+        os.environ["RESUME"] = "1"
+        with in_tmp():
+            g.save_checkpoint({"title": "t", "scenes": scene_set()}, [], 1)
+            ck = json.load(open("checkpoint.json"))
+            ck["created"] -= 13 * 3600
+            json.dump(ck, open("checkpoint.json", "w"))
+            with self.assertRaises(SystemExit):
+                g.load_checkpoint()
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
