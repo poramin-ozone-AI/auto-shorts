@@ -1,5 +1,5 @@
-# AUTO SHORTS AI
+# AUTO SHORTS AI — Final 16:9 Creative Reference Edition
 
-Thai-language YouTube Shorts generator. See [README_TH.txt](README_TH.txt) for setup, quota safeguards, resume behavior, offline tests, and known limitations.
+See `README_TH.txt` for Thai setup instructions, workflow behavior, limitations, and free-tier safety notes.
 
-This repository's workflow is manual-dispatch by default. Draft Release publishing is an explicit opt-in input; scheduled runs remain disabled.
+This release uses the user's supplied mascot poses as transparent overlays, keeps the hand-drawn colored-pencil/crayon art direction, allows scene-appropriate colors, and supports optional Thai in-image text. The Pollinations image endpoint receives text prompts only; the background reference image is not uploaded as an image-to-image input.

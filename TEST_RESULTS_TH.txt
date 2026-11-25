@@ -1,12 +1,19 @@
-ผลทดสอบ Offline — FINAL CANDIDATE
+ผลการทดสอบ Offline — FINAL 16:9
 
-คำสั่ง:
-  python -m py_compile generate.py test_pipeline.py
-  python -m unittest -q test_pipeline.py
+- python -m py_compile generate.py test_pipeline.py: ผ่าน
+- python -m unittest -q test_pipeline.py: ผ่าน 53/53 tests (ตรวจซ้ำในสภาพแวดล้อมนี้)
+- ทดสอบการประกอบ Character PNG โปร่งใสบนภาพแนวนอน 16:9: ผ่าน
+- ทดสอบการเข้ารหัส H.264 / yuv420p / 1920x1080 / 30 FPS: ผ่าน
+- ทดสอบวางข้อความไทยลงในภาพและตรวจขนาดไฟล์: ผ่าน
+- ทดสอบว่า TTS ส่งคำสั่งสไตล์เป็น metadata ไม่รวมในบทพูด: ผ่าน
+- ทดสอบเลือก pose ตามเนื้อหา: ผ่าน
+- ทดสอบสี Prompt ไม่มีชุดสีตายตัว: ผ่าน
+- ทดสอบ fingerprint รวม pose และ image_text: ผ่าน
+- ทดสอบ preflight ไม่ส่งคำขอภาพออกเครือข่าย: ผ่าน
+- ทดสอบหยุดเมื่อ HTTP 429/402/403: ผ่านตามชุดทดสอบจำลอง
+- ทดสอบ Workflow: Schedule ปิด, Artifact default, Draft Release opt-in: ผ่าน
 
-ผลล่าสุด:
-  py_compile: PASS
-  unittest: PASS — 39 tests
-
-ไม่มีการเรียก Gemini, Pollinations, Wikipedia หรือ Edge TTS จริง
-ไม่มีการรัน GitHub Actions, สร้าง Release, Commit หรือ Push
+ข้อจำกัดการทดสอบ
+- การทดสอบใช้ Mock API และไฟล์สื่อทดสอบ ไม่มีการเรียก Gemini, Pollinations, Wikipedia หรือ Edge TTS จริง
+- ไม่ได้รัน GitHub Actions และไม่ได้ Commit/Push/สร้าง Release
+- ผลทดสอบ Offline ไม่รับรองโควตาหรือคุณภาพภาพ/เสียงจากบริการภายนอกในวันใช้งานจริง

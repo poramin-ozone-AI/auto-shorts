@@ -9,14 +9,17 @@ CATEGORIES = ["ร่างกายมนุษย์", "สัตว์", "อ
 NICHE = os.environ.get("NICHE", "").strip() or random.choice(CATEGORIES)
 VOICE = os.environ.get("VOICE_NAME", "").strip() or "Enceladus"
 
-TEXT_MODEL = "gemini-3.8-flash"          # เขียนบท (โควตาน้อย 20 ครั้ง/วัน ใช้ครั้งเดียวต่อคลิป)
+TEXT_MODEL = "gemini-3.8-flash"          # โมเดลเขียนบท
 TOPIC_MODEL = "gemini-3.5-flash-lite"    # เลือกหัวข้อ (โควตาแยก ถ้าใช้ไม่ได้จะถอยไปใช้ TEXT_MODEL)
 # เขียนบท: ลอง 3.8 Flash ก่อน ถ้า 503/โควตาเต็ม/บทผิดเกณฑ์ ถอยไป flash-lite (ถ้าบทผิดเกณฑ์ที่ lite ลองซ้ำได้อีก 1 ครั้ง)
 WRITER_MODELS = [TEXT_MODEL, TOPIC_MODEL, TOPIC_MODEL]
+# TTS fallback order: expressive Gemini Flash -> faster/lower-cost Gemini Flash-Lite -> Thai Edge Neural.
+# HTTP 429 is a hard stop (do not cascade to another provider when quota is exhausted).
 TTS_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"]
 EDGE_VOICE = "th-TH-NiwatNeural"
 TTS_STYLE = "พูดภาษาไทยแบบคนเล่าเรื่องให้เพื่อนฟัง ชัดเจนทุกคำ และเว้นจังหวะก่อนข้อเท็จจริงที่น่าทึ่งที่สุด:"
 API = "https://generativelanguage.googleapis.com/v1beta/models/"
+ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 FPS = 30
 PAST_LIMIT = 30
 TOPIC_TRIES = 2
@@ -26,10 +29,22 @@ WIKI_HEADERS = {"User-Agent": "auto-shorts/1.0 (https://github.com/poramin-ozone
 ARTICLE_MAX = 14000
 ARTICLE_MIN = 2000
 
-STYLE = ("hand-drawn cartoon stickman style, thick black outlines, flat bright solid colors, "
-         "simple clean background, vertical 9:16, absolutely no text, no letters, no numbers")
-CHARACTER = ("the single main character is a white round-headed stickman with a white and green mohawk, "
-             "thick black stick limbs, big expressive eyes and an exaggerated facial expression")
+STYLE = ("rough amateur hand-drawn colored-pencil and crayon cartoon illustration, landscape horizontal 16:9, "
+         "visible uneven scribble strokes and paper texture, imperfect thick black pencil outlines, "
+         "slightly shaky sketch lines, naturally varied line weight, simple readable shapes, "
+         "flat hand-colored areas with imperfect coloring, restrained rough pencil shading, "
+         "choose colors naturally to match the actual subject, location, time of day and story mood; "
+         "do not use a fixed palette, do not force blue/yellow/green, "
+         "no polished vector finish, no photorealism, no 3D, no glossy gradients, "
+         "no generated text, no letters, no numbers, no people, no stickman, "
+         "leave a clear foreground area for the real mascot overlay")
+CHARACTER = ("The channel mascot is a white round-headed stickman with the exact alternating green-and-white spiky mohawk, "
+             "black expressive eyes and mouth, thin black stick limbs, black rounded hands and feet. "
+             "The real transparent character pose is composited by the program; never generate another character.")
+REFERENCE_STYLE_NOTE = ("Match the supplied style reference in medium and line quality only: casual hand-drawn colored-pencil/crayon marks, "
+                       "visible scribble texture, imperfect dark outlines, uneven human-drawn strokes and simple cartoon construction. "
+                       "The reference does not prescribe scene content or a fixed color palette. Choose the scene's colors from its subject and mood.")
+POSE_OPTIONS = ("neutral", "friendly", "side", "back", "explain", "walk", "point", "surprised")
 
 TOPIC_PROMPT = """คุณคือผู้คัดหัวข้อคลิปสั้นแนว "ความรู้แปลกๆ"
 เลือก 1 หัวข้อในหมวด: __NICHE__ (ต้องอยู่ในหมวดนี้เท่านั้น)
@@ -42,7 +57,7 @@ __PAST__
 ตอบ JSON ล้วนๆ ไม่มี markdown รูปแบบ:
 {"wiki_title":"ชื่อบทความภาษาอังกฤษใน Wikipedia ให้ตรงตัวที่สุด"}"""
 
-WRITER = """คุณคือนักเขียนบทคลิปสั้นแนวตั้งภาษาไทยแนว "ความรู้แปลกๆ"
+WRITER = """คุณคือนักเขียนบทคลิปสั้นภาษาไทยแนว "ความรู้แปลกๆ" สำหรับวิดีโอแนวนอน 16:9
 ด้านล่างคือเนื้อหาบทความ Wikipedia หัวข้อ: __TITLE__
 กฎเหล็ก: ใช้ข้อเท็จจริง ตัวเลข และปี จากบทความนี้เท่านั้น ห้ามเติมข้อมูลจากความจำหรือจากที่อื่น
 ถ้าบทความบอกว่ายังถกเถียงหรือไม่แน่ชัด ให้พูดว่า "นักวิทยาศาสตร์เชื่อว่า" หรือ "มีหลักฐานชี้ว่า" ข้อที่บทความไม่ยืนยันให้ตัดทิ้ง
@@ -59,17 +74,19 @@ WRITER = """คุณคือนักเขียนบทคลิปสั�
 บทพูดห้ามมีสัญลักษณ์ วงเล็บ หรือเครื่องหมายคำพูด เพราะระบบเสียงอ่านจะเพี้ยน
 จำนวนฉาก 8-14 ฉาก บทพูดแต่ละฉากยาวราว 50-90 ตัวอักษร บทพูดรวมทั้งคลิปยาวราว 700-1,100 ตัวอักษร (ประมาณ 45-80 วินาที) แต่ละฉากต้องเป็นประโยคที่จบสมบูรณ์ในตัวเอง เพื่อให้เสียงเว้นจังหวะระหว่างฉาก
 ถ้าหัวข้อใหญ่เกินกว่าจะจบใน 14 ฉาก ให้เล่าเฉพาะตอนที่ 1 แล้วใส่ part_note
-image_prompt เขียนเป็นภาษาอังกฤษ บรรยายเฉพาะการกระทำในฉากที่อธิบายกลไกของสิ่งที่พูด ไม่ต้องเขียนสไตล์หรือรูปร่างตัวละคร
+image_prompt เขียนเป็นภาษาอังกฤษ บรรยายฉากหลัง สถานที่ วัตถุ การกระทำ และองค์ประกอบภาพให้ตรงกับบทฉากนั้นเท่านั้น ไม่ต้องบรรยายตัวละครหรือสไตล์ภาพ เพราะระบบวางตัวละครจริงและเติมสไตล์มาตรฐานให้อัตโนมัติ สีต้องเลือกตามเนื้อหาและบรรยากาศ ห้ามใช้ชุดสีตายตัว
+pose เลือกหนึ่งค่าให้ตรงกับการกระทำ: neutral, friendly, side, back, explain, walk, point, surprised
+image_text ใส่ข้อความภาษาไทยสั้นๆ ที่ควรปรากฏเป็นส่วนหนึ่งของภาพเฉพาะฉากที่จำเป็นเท่านั้น ถ้าไม่จำเป็นให้เป็นสตริงว่าง ห้ามใส่คำบรรยายหรือประโยคยาว
 แต่ละฉากต้องเขียนให้ครบในตัว (ระบุสถานที่ วัตถุ การกระทำ) เพราะภาพแต่ละฉากถูกสร้างแยกกัน
 ฉากแรกให้เป็นภาพ action ดึงสายตา
 ห้ามมีตัวหนังสือ ตัวเลขในภาพ และห้ามใส่วัตถุที่มักมีตัวหนัง เช่น ป้าย กราฟ แผนภูมิ หนังสือ หนังสือพิมพ์ จอคอมพิวเตอร์ ฉลาก ให้ใช้ภาพเปรียบเทียบแทน
 ชื่อคลิป (title) ต้องสั้น ภาษาไทย และระบุหัวข้อจริงชัดเจน (เช่น ชื่อสัตว์ ชื่อปรากฏการณ์) ห้ามตั้งชื่อกำกวม
-ทุกฉากต้องมีตัวละครสติกแมนตัวเดียวเป็นผู้กระทำ ระบุในภาพว่าสติกแมนกำลังทำอะไรกับวัตถุไหน
+ทุกฉากต้องมีตัวละครสติกแมนประจำช่องอยู่ในภาพ ระบบจะวางภาพตัวละครจริงจาก Character Reference ทับภายหลัง ให้ image_prompt บรรยายฉากหลังและวัตถุสำคัญเท่านั้น
 ห้ามเริ่มสองฉากติดกันด้วยคำเชื่อมซ้ำ เช่น แล้ว, ดังนั้น, และ
 ฉากสรุปต้องเป็นประโยคที่คนจำได้ และห้ามพูดซ้ำคำที่ใช้ในฉากฮุก
 ห้ามใส่เครื่องหมาย " ภายในข้อความใดๆ ใน JSON
 ตอบเป็น JSON ล้วนๆ ไม่มี markdown รูปแบบ:
-{"title":"ชื่อคลิปสั้นๆ ภาษาไทย","part_note":"","scenes":[{"narration":"บทพูด","image_prompt":"English scene"}]}
+{"title":"ชื่อคลิปสั้นๆ ภาษาไทย","part_note":"","scenes":[{"narration":"บทพูด","image_prompt":"English scene","pose":"explain","image_text":"ข้อความสั้นหรือสตริงว่าง"}]}
 
 เนื้อหาบทความ:
 __ARTICLE__"""
@@ -250,6 +267,8 @@ def valid(d):
                 and HARD_SCENES[0] <= len(sc) <= HARD_SCENES[1]
                 and all(isinstance(s.get("narration"), str) and s["narration"].strip()
                         and isinstance(s.get("image_prompt"), str) and s["image_prompt"].strip()
+                        and (s.get("pose") is None or s.get("pose") in POSE_OPTIONS)
+                        and (s.get("image_text") is None or (isinstance(s.get("image_text"), str) and len(s.get("image_text")) <= 48))
                         for s in sc)
                 and HARD_CHARS[0] <= total <= HARD_CHARS[1])
     except Exception:
@@ -351,7 +370,8 @@ def snap_durations(durs, total, wav, window=1.0):
 
 
 def tts_gemini(text, model, wav):
-    body = {"contents": [{"parts": [{"text": TTS_STYLE + "\n" + text}]}],
+    # Keep transcript verbatim; pass delivery direction as metadata so it is not spoken aloud.
+    body = {"contents": [{"parts": [{"text": text, "speechMetadata": {"style": TTS_STYLE}}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
                                  "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": VOICE}}}}}
     resp = call(model, body)
@@ -394,8 +414,9 @@ def make_voice(scenes):
     text = "\n".join(s["narration"].strip() for s in scenes)
     wav = "work/voice.wav"
     reasons = []
-    for m in TTS_MODELS:
-        log(f"[ขั้น 3b] สร้างเสียงทั้งคลิปด้วย {m} (เสียง {VOICE})")
+    for index, m in enumerate(TTS_MODELS):
+        role = "ตัวหลัก" if index == 0 else "Gemini ตัวสำรอง"
+        log(f"[ขั้น 3b] สร้างเสียงทั้งคลิปด้วย {m} ({role}, เสียง {VOICE})")
         try:
             if tts_gemini(text, m, wav):
                 if reasons:
@@ -408,8 +429,8 @@ def make_voice(scenes):
         except Exception as e:
             log(f"  ผิดพลาด: {e}")
             reasons.append(f"{m} ผิดพลาด")
-    log("[ขั้น 3b] ถอยไปใช้ edge-tts")
-    warnings.append(f"เสียงพากย์ใช้ edge-tts ({'; '.join(reasons)})")
+    log("[ขั้น 3b] Gemini ทั้งสองรุ่นไม่สำเร็จ จึงใช้ Edge TTS (ตัวสำรองสุดท้าย)")
+    warnings.append(f"เสียงพากย์ใช้ Edge TTS / {EDGE_VOICE} ({'; '.join(reasons)})")
     tts_edge(text, wav)
     return wav
 
@@ -421,88 +442,178 @@ except ValueError:
     CROP_BOTTOM = 0.0  # ตัดขอบล่างของภาพกี่เปอร์เซ็นต์ (กรณีมีลายน้ำมุมล่าง)
 
 
-def solid_image(path):
-    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=0xFFE066:s=1080x1920",
-         "-frames:v", "1", "-pix_fmt", "yuvj420p", path])
-
-
 class ImageBlocked(Exception):
     pass
 
 
 _img_not_before = 0.0
-_consec_402 = 0
 
 
 def img_get(url, timeout):
-    # ทุกคำขอภาพผ่านตัวควบคุมช่วงห่าง; 402/403/429 จะหยุดที่ caller โดยไม่ retry
+    # ทุกคำขอภาพผ่านตัวควบคุมช่วงห่าง; 402/403/429 จะหยุดทันทีที่ caller
     global _img_not_before
     wait = _img_not_before - time.time()
     if wait > 0:
-        log(f"  รอ {wait:.0f} วินาที (Pollinations ฟรีจำกัดความถี่)")
+        log(f"  รอ {wait:.0f} วินาที (จำกัดช่วงห่างคำขอภาพ)")
         time.sleep(wait)
     _img_not_before = time.time() + IMG_GAP
     r = requests.get(url, timeout=timeout)
-    if r.status_code == 402:
-        try:
-            ra = int(float(r.headers.get("Retry-After", "0")))
-        except (TypeError, ValueError):
-            ra = 0
-        _img_not_before = time.time() + min(max(ra + 1, IMG_GAP), 180)
     return r
 
 
-def make_image(prompt, path, base_seed):
-    full = f"{STYLE}, {CHARACTER}, {prompt}"
-    # Remove stale cache records before a new attempt; failed generation must not look reusable.
-    for stale in (path, path + ".ok", path + ".meta.json", path + ".meta.json.tmp", path + ".part"):
-        try:
-            os.remove(stale)
-        except FileNotFoundError:
-            pass
+def infer_pose(scene, scene_index=0):
+    """Choose one of the supplied full-body poses from scene action/narration."""
+    requested = scene.get("pose") if isinstance(scene, dict) else None
+    if requested in POSE_OPTIONS:
+        return requested
+    text = " ".join(str(scene.get(k, "")) for k in ("narration", "image_prompt")) if isinstance(scene, dict) else str(scene)
+    if any(k in text for k in ("ตกใจ", "ช็อก", "กลัว", "惊", "surpris", "shocked", "afraid", "scared")):
+        return "surprised"
+    if any(k in text for k in ("ชี้", "ชี้ให้ดู", "point", "indicate")):
+        return "point"
+    if any(k in text for k in ("วิ่ง", "เดิน", "หนี", "วิ่งหนี", "walk", "run", "escape")):
+        return "walk"
+    if any(k in text for k in ("ด้านหลัง", "หันหลัง", "มองออกไป", "back view", "from behind")):
+        return "back"
+    if any(k in text for k in ("ด้านข้าง", "หันข้าง", "side view", "profile")):
+        return "side"
+    if any(k in text for k in ("อธิบาย", "แสดงให้เห็น", "นำเสนอ", "explain", "present")):
+        return "explain"
+    if any(k in text for k in ("ยิ้ม", "ดีใจ", "ทักทาย", "ยินดี", "happy", "welcome")):
+        return "friendly"
+    return "neutral"
+
+
+def _pose_path(pose):
+    pose = pose if pose in POSE_OPTIONS else "neutral"
+    pose_index = {"neutral": 1, "friendly": 5, "side": 3, "back": 4,
+                  "explain": 5, "walk": 6, "point": 7, "surprised": 8}[pose]
+    path = os.path.join(ASSET_DIR, "characters", f"pose_{pose_index}.png")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"ไม่พบ Character Reference pose: {path}")
+    return path
+
+
+def render_image_text(image_path, text):
+    """Render optional Thai words as artwork, never as subtitles."""
+    text = (text or "").strip()
+    if not text:
+        return
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError as e:
+        raise RuntimeError("ต้องติดตั้ง Pillow เพื่อวางข้อความภาษาไทยในภาพ") from e
+    image = Image.open(image_path).convert("RGBA")
+    draw = ImageDraw.Draw(image)
+    font_candidates = [
+        "/usr/share/fonts/truetype/noto/NotoSansThai-Bold.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansThai-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    font_path = next((f for f in font_candidates if os.path.isfile(f)), None)
+    if not font_path:
+        raise RuntimeError("ไม่พบฟอนต์ที่รองรับภาษาไทยสำหรับข้อความในภาพ")
+    try:
+        font = ImageFont.truetype(font_path, 64, layout_engine=ImageFont.Layout.RAQM)
+    except Exception:
+        font = ImageFont.truetype(font_path, 64)
+    # วางมุมบนซ้ายในพื้นที่ปลอดภัย จำกัดไม่ให้ทับขอบภาพ
+    max_width = 760
+    lines, line = [], ""
+    # Thai often has no spaces; wrap by grapheme-like clusters so marks stay with their base.
+    clusters, i = [], 0
+    while i < len(text):
+        cluster = text[i]
+        if cluster in "เแโใไ" and i + 1 < len(text):
+            cluster += text[i + 1]; i += 2
+        else:
+            i += 1
+        while i < len(text) and unicodedata.category(text[i]).startswith("M"):
+            cluster += text[i]; i += 1
+        clusters.append(cluster)
+    for cluster in clusters:
+        candidate = line + cluster
+        if line and draw.textbbox((0, 0), candidate, font=font, stroke_width=3)[2] > max_width:
+            lines.append(line); line = cluster
+        else:
+            line = candidate
+    if line: lines.append(line)
+    if len(lines) > 2:
+        lines = lines[:2]
+    y = 72
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font, stroke_width=5)
+        w = bbox[2] - bbox[0]
+        x = max(55, (image.width - w) // 2)
+        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255),
+                  stroke_width=7, stroke_fill=(20, 20, 20, 255))
+        y += 88
+    tmp = image_path + ".text.tmp.jpg"
+    image.convert("RGB").save(tmp, format="JPEG", quality=95, optimize=True)
+    os.replace(tmp, image_path)
+
+
+def compose_character(background_path, output_path, scene_index, scene=None):
+    """Overlay the supplied transparent mascot pose; placement alternates to suit wide scenes."""
+    scene = scene or {}
+    pose = _pose_path(infer_pose(scene, scene_index))
+    composed = output_path + ".composed.jpg"
+    # Vary side and size across shots so the mascot does not occupy the same fixed position.
+    side = "left" if scene_index % 2 == 0 else "right"
+    x_expr = "120" if side == "left" else "W-w-120"
+    height = 660 if scene_index % 3 else 720
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", background_path, "-i", pose,
+         "-filter_complex", f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080[bg];"
+                           f"[1:v]scale=-1:{height}[mascot];[bg][mascot]overlay=x={x_expr}:y=H-h-45:format=auto,format=yuvj444p[out]",
+         "-map", "[out]", "-frames:v", "1", composed])
+    os.replace(composed, output_path)
+    render_image_text(output_path, scene.get("image_text", ""))
+
+
+def make_image(prompt, path, base_seed, scene_index=0, scene=None):
+    reserved_side = "left" if scene_index % 2 == 0 else "right"
+    layout_note = f"Keep the {reserved_side} foreground visually uncluttered for the mascot; place the main story subject toward the opposite side."
+    full = f"{STYLE}, {REFERENCE_STYLE_NOTE}, {layout_note}, background scene: {prompt}"
+    for stale in (path, path + ".ok", path + ".meta.json", path + ".meta.json.tmp", path + ".part.jpg"):
+        try: os.remove(stale)
+        except FileNotFoundError: pass
+    url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full) +
+           f"?width=1280&height=720&model=flux&nologo=true&seed={base_seed}")
     for t in range(1, 3):
-        seed = base_seed  # ใช้ seed เดิมทุกครั้งเพื่อให้ fingerprint ของภาพ Resume คงที่
-        url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full) +
-               f"?width=720&height=1280&model=flux&nologo=true&seed={seed}")
         try:
             r = img_get(url, 90)
-            if (r.status_code == 200 and r.headers.get("content-type", "").startswith("image")
-                    and len(r.content) > 5000):
-                part = path + ".part"
-                with open(part, "wb") as f:
-                    f.write(r.content)
-                os.replace(part, path)
-                probe = subprocess.run(
-                    ["ffprobe", "-v", "error", "-select_streams", "v:0",
-                     "-show_entries", "stream=width,height", "-of", "json", path],
-                    capture_output=True, text=True
-                )
-                streams = json.loads(probe.stdout).get("streams", []) if probe.returncode == 0 else []
-                if not streams or not int(streams[0].get("width", 0)) or not int(streams[0].get("height", 0)):
-                    raise ValueError("ข้อมูลตอบกลับไม่ใช่ไฟล์ภาพที่ถอดรหัสได้")
-                decode = subprocess.run(
-                    ["ffmpeg", "-v", "error", "-i", path, "-frames:v", "1", "-f", "null", "-"],
-                    capture_output=True, text=True
-                )
-                if decode.returncode != 0:
-                    raise ValueError("FFmpeg ถอดรหัสภาพไม่สำเร็จ")
-                with open(path + ".ok", "w", encoding="utf-8") as f:
-                    f.write("1")
-                write_image_cache_metadata(path, prompt, base_seed)
-                return True
-            log(f"  ภาพลองที่ {t} ล้ม: {r.status_code}")
             if r.status_code in (402, 403, 429):
                 raise ImageBlocked(f"HTTP {r.status_code}: บริการจำกัดหรือปฏิเสธการใช้ หยุดทันทีโดยไม่ลองซ้ำ")
-        except ImageBlocked:
-            raise
-        except (requests.RequestException, OSError, ValueError, json.JSONDecodeError) as e:
+            if (r.status_code == 200 and r.headers.get("content-type", "").startswith("image") and len(r.content) > 5000):
+                raw = path + ".part.jpg"
+                with open(raw, "wb") as f: f.write(r.content)
+                compose_character(raw, path, scene_index, scene)
+                os.remove(raw)
+                probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height", "-of", "json", path], capture_output=True, text=True)
+                streams = json.loads(probe.stdout).get("streams", []) if probe.returncode == 0 else []
+                if not streams or (int(streams[0].get("width", 0)), int(streams[0].get("height", 0))) != (1920, 1080):
+                    raise ValueError("ภาพประกอบตัวละครไม่ใช่ 1920x1080")
+                decode = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True)
+                if decode.returncode != 0: raise ValueError("FFmpeg ถอดรหัสภาพไม่สำเร็จ")
+                with open(path + ".ok", "w", encoding="utf-8") as f: f.write("1")
+                write_image_cache_metadata(path, scene, base_seed, scene_index)
+                return True
+            log(f"  ภาพลองที่ {t} ล้ม: HTTP {r.status_code}")
+        except ImageBlocked: raise
+        except (requests.RequestException, OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError, RuntimeError) as e:
             log(f"  ภาพลองที่ {t} ล้ม: {e}")
-    for stale in (path, path + ".ok", path + ".meta.json", path + ".part"):
-        try:
-            os.remove(stale)
-        except FileNotFoundError:
-            pass
+    for stale in (path, path + ".ok", path + ".meta.json", path + ".part.jpg"):
+        try: os.remove(stale)
+        except FileNotFoundError: pass
     return False
+
+
+def preflight_image():
+    # Deliberately offline: do not consume a real image-generation request as a health check.
+    log("  ข้ามการสร้างภาพทดสอบออนไลน์ เพื่อไม่เสียคำขอภาพก่อนเริ่มงานจริง")
+    return True
+
 def make_clip(img, dur, i, out):
     frames = max(1, round(dur * FPS))
     step = 0.18 / frames
@@ -511,36 +622,28 @@ def make_clip(img, dur, i, out):
     else:
         z = f"if(eq(on,1),1.18,max(zoom-{step:.6f},1.0))"
     pre = f"crop=iw:ih*{1 - CROP_BOTTOM:.4f}:0:0," if CROP_BOTTOM > 0 else ""
-    vf = (pre + "scale=2160:3840:force_original_aspect_ratio=increase,crop=2160:3840,"
-          f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps={FPS},"
-          "format=yuv420p")
+    vf = (pre + "scale=3840:2160:force_original_aspect_ratio=increase,crop=3840:2160,"
+          f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1920x1080:fps={FPS},"
+          "setparams=range=tv,format=yuv420p")
     run(["ffmpeg", "-y", "-loglevel", "error", "-i", img, "-vf", vf, "-frames:v", str(frames),
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-r", str(FPS), out])
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-color_range", "tv", "-r", str(FPS), out])
 
-
-def preflight_image():
-    # เช็กว่า Pollinations ตอบก่อนเริ่ม เพื่อไม่เสียโควตา Gemini ฟรีๆ ถ้าบริการภาพล่ม
-    for t in (1, 2):
-        try:
-            r = img_get("https://image.pollinations.ai/prompt/" + urllib.parse.quote("a red circle on white background")
-                        + "?width=256&height=256&model=flux&nologo=true", 60)
-            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image") and len(r.content) > 1000:
-                return True
-            log(f"  เช็กบริการภาพครั้งที่ {t} ล้ม: {r.status_code}")
-            if r.status_code in (402, 403, 429):
-                return False
-        except requests.RequestException as e:
-            log(f"  เช็กบริการภาพครั้งที่ {t} ล้ม: {e}")
-    return False
 
 CKPT = "checkpoint.json"
 CKPT_MAX_AGE = 12 * 3600  # วินาที
 
 
-def scene_fingerprint(prompt, clip_seed):
+def scene_fingerprint(scene, clip_seed, scene_index=0):
     """Stable identity for the exact image prompt + style + seed."""
+    ref_hashes = {}
+    ref_names = [os.path.join(ASSET_DIR, "character_reference.png"), os.path.join(ASSET_DIR, "background_style_reference.png")] + [
+        os.path.join(ASSET_DIR, "characters", f"pose_{i}.png") for i in range(1, 9)]
+    for ref_name in ref_names:
+        if os.path.isfile(ref_name):
+            ref_hashes[ref_name] = image_sha256(ref_name)
     payload = json.dumps(
-        {"prompt": prompt, "seed": clip_seed, "style": STYLE, "character": CHARACTER},
+        {"scene": scene, "seed": clip_seed, "style": STYLE, "character": CHARACTER,
+         "scene_index": scene_index, "layout": "1920x1080", "ref_version": 3, "references": ref_hashes},
         ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
@@ -554,7 +657,7 @@ def image_sha256(path):
     return h.hexdigest()
 
 
-def image_cache_valid(path, prompt, clip_seed):
+def image_cache_valid(path, scene, clip_seed, scene_index=0):
     """Reuse only a complete image whose bytes and scene identity still match."""
     meta_path = path + ".meta.json"
     try:
@@ -563,9 +666,9 @@ def image_cache_valid(path, prompt, clip_seed):
             return False
         with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
-        if meta.get("version") != 1:
+        if meta.get("version") != 3:
             return False
-        if meta.get("fingerprint") != scene_fingerprint(prompt, clip_seed):
+        if meta.get("fingerprint") != scene_fingerprint(scene, clip_seed, scene_index):
             return False
         if meta.get("size") != os.path.getsize(path):
             return False
@@ -577,8 +680,8 @@ def image_cache_valid(path, prompt, clip_seed):
             capture_output=True, text=True, check=True
         )
         streams = json.loads(probe.stdout).get("streams", [])
-        if not (streams and int(streams[0].get("width", 0)) > 0
-                and int(streams[0].get("height", 0)) > 0):
+        if not (streams and int(streams[0].get("width", 0)) == 1920
+                and int(streams[0].get("height", 0)) == 1080):
             return False
         decode = subprocess.run(
             ["ffmpeg", "-v", "error", "-i", path, "-frames:v", "1", "-f", "null", "-"],
@@ -589,10 +692,10 @@ def image_cache_valid(path, prompt, clip_seed):
         return False
 
 
-def write_image_cache_metadata(path, prompt, clip_seed):
+def write_image_cache_metadata(path, scene, clip_seed, scene_index=0):
     meta = {
-        "version": 1,
-        "fingerprint": scene_fingerprint(prompt, clip_seed),
+        "version": 3,
+        "fingerprint": scene_fingerprint(scene, clip_seed, scene_index),
         "sha256": image_sha256(path),
         "size": os.path.getsize(path),
     }
@@ -641,7 +744,7 @@ def main():
     global NICHE
     ck = load_checkpoint()
     need_img = ck is None or any(
-        not image_cache_valid(f"work/img{i}.jpg", scene["image_prompt"], ck["clip_seed"])
+        not image_cache_valid(f"work/img{i}.jpg", scene, ck["clip_seed"], i)
         for i, scene in enumerate(ck["script"]["scenes"])
     )
     if need_img:
@@ -670,14 +773,14 @@ def main():
     for i, s in enumerate(scenes):
         log(f"[ขั้น 3] ภาพฉาก {i + 1}/{n}")
         img = f"work/img{i}.jpg"
-        if ck and image_cache_valid(img, s["image_prompt"], clip_seed):
+        if ck and image_cache_valid(img, s, clip_seed, i):
             log("  ใช้ภาพเดิมที่ผ่านการตรวจ Hash และ Scene Fingerprint")
             ok = True
         elif time.time() - t0 > IMG_BUDGET:
             sys.exit(f"เกินงบเวลาสร้างภาพที่ฉาก {i + 1}; หยุดโดยไม่ใช้ภาพฉากอื่นแทน")
         else:
             try:
-                ok = make_image(s["image_prompt"], img, clip_seed)
+                ok = make_image(s["image_prompt"], img, clip_seed, i, s)
             except ImageBlocked as e:
                 sys.exit(f"{e}; บทและภาพที่ได้แล้วถูกบันทึกเป็น checkpoint ตรวจสถานะบริการก่อน resume")
         if not ok:
@@ -722,8 +825,8 @@ def main():
     if not videos or not audios:
         sys.exit("ตรวจคุณภาพไม่ผ่าน: ต้องมีทั้งภาพและเสียง")
     v = videos[0]
-    if (v.get("width"), v.get("height"), v.get("r_frame_rate")) != (1080, 1920, "30/1"):
-        sys.exit("ตรวจคุณภาพไม่ผ่าน: ต้องเป็น 1080x1920 / 30 FPS")
+    if (v.get("width"), v.get("height"), v.get("r_frame_rate")) != (1920, 1080, "30/1"):
+        sys.exit("ตรวจคุณภาพไม่ผ่าน: ต้องเป็น 1920x1080 / 30 FPS")
     if v.get("codec_name") != "h264" or v.get("pix_fmt") != "yuv420p":
         sys.exit("ตรวจคุณภาพไม่ผ่าน: วิดีโอต้องเป็น H.264 / yuv420p")
     if audios[0].get("codec_name") != "aac":
@@ -733,7 +836,7 @@ def main():
         sys.exit(f"ตรวจคุณภาพไม่ผ่าน: ระยะเวลา {duration:.1f}s อยู่นอกช่วง 10-175 วินาที (Shorts ไม่เกิน 3 นาที)")
     if abs(duration - total) > 1.0:
         sys.exit(f"ตรวจคุณภาพไม่ผ่าน: ความยาวคลิป {duration:.1f}s ไม่ตรงกับเสียง {total:.1f}s")
-    log(f"[QC ผ่าน] 1080x1920 / 30 FPS / {duration:.1f}s / มีเสียง")
+    log(f"[QC ผ่าน] 1920x1080 / 30 FPS / {duration:.1f}s / มีเสียง")
 
     title = script["title"].strip().replace("\n", " ")
     if script.get("part_note"):

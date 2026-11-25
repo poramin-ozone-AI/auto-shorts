@@ -1,19 +1,19 @@
-CHANGELOG — AUTO SHORTS AI
+CHANGELOG — FINAL 16:9 CREATIVE REFERENCE EDITION
 
-FINAL CANDIDATE — 2026-11-25
-- รวมการหยุดเมื่อ Gemini 429 และ Pollinations 402/403/429 จากชุด V3
-- หยุด TTS ทันทีเมื่อ Gemini แจ้ง quota เต็ม ไม่ fallback ไป Edge TTS ต่อ
-- หยุดเมื่อภาพฉากใดสร้างไม่สำเร็จ ไม่ใช้ภาพก่อนหน้าหรือภาพสีพื้นแทน
-- ตรวจภาพใหม่ด้วย ffprobe และ FFmpeg decode ก่อนทำเครื่องหมายสำเร็จ
-- เพิ่ม Image Cache Metadata: SHA-256, ขนาดไฟล์ และ Scene Fingerprint ที่ผูกกับ prompt/style/character/seed
-- Resume จะ reuse เฉพาะภาพที่ marker, metadata, hash, fingerprint และการ decode ผ่านครบ
-- เขียน checkpoint แบบ atomic; ถ้าบันทึก checkpoint ไม่สำเร็จจะหยุดก่อนสร้างภาพ/เสียง
-- ตรวจโครงสร้าง checkpoint และแหล่งข้อมูลก่อน Resume
-- แยก GitHub permissions: job สร้างคลิปใช้ contents: read; job สร้าง Draft Release ใช้ contents: write เฉพาะเมื่อเลือก publish_draft=true
-- เพิ่มการส่ง output เป็น Actions Artifact โดยค่าเริ่มต้นไม่สร้าง Release
-- Schedule ยังคงปิด และ cache แยกตาม branch
-- ปรับ README/คู่มือภาษาไทยและบันทึกข้อจำกัด
+- กำหนดมาตรฐานวิดีโอแนวนอน 16:9, 1920x1080, 30 FPS
+- ยกเลิกชุดสีตายตัว ให้ฉากเลือกสีตามเนื้อหา สถานที่ เวลา และอารมณ์
+- คงสไตล์ดินสอสี/สีเทียน เส้นดำหยาบไม่สม่ำเสมอ และรอยระบายแบบวาดมือ
+- ปรับการเลือกท่าตัวละครจากการวนตามลำดับ เป็น pose ที่โมเดลระบุหรือระบบอนุมานจากฉาก
+- ปรับตำแหน่งตัวละครให้สลับซ้าย/ขวาและขนาดเล็กน้อย พร้อม Prompt เว้นพื้นที่สำหรับตัวละคร
+- เพิ่ม image_text สำหรับข้อความภาษาไทยสั้น ๆ ที่วางเป็นส่วนหนึ่งของภาพ ไม่ใช่ Subtitle
+- เพิ่ม Pillow และ Noto Thai font สำหรับวางข้อความภาษาไทย
+- แยกคำสั่งสไตล์เสียงไปไว้ใน speechMetadata แทนการต่อท้ายบทพูด เพื่อไม่ให้เสียงอ่านคำสั่งสไตล์ออกมา
+- ทำภาพท่าตัวละครเป็น PNG โปร่งใสและเพิ่มการตรวจ asset
+- เพิ่ม scene fingerprint version 3 ครอบคลุม image_prompt, pose, image_text, style, seed และ reference assets
+- เปลี่ยน preflight ภาพเป็น Offline ไม่ยิงคำขอสร้างภาพทดสอบก่อนเริ่มงาน
+- คงการหยุดทันทีเมื่อ Gemini 429 หรือ Pollinations 402/403/429
+- คง QC 1920x1080 / 30 FPS / H.264 / yuv420p / AAC
+- คง Workflow แบบ Manual only, Artifact default และ Draft Release opt-in
 
-หมายเหตุ
-- ใช้ Pollinations ตาม provider ใน source ล่าสุด ไม่เปลี่ยนไปใช้ Cloudflare
-- ไม่เรียก API จริง ไม่รัน GitHub Actions ไม่ Commit/Push และไม่เปิด Billing ในขั้นตอนจัดทำ/ทดสอบนี้
+- ระบุลำดับเสียงพากย์ชัดเจน: Gemini 3.8 Flash TTS → Gemini 3.8 Flash-Lite TTS → Edge TTS (Niwat)
+- เพิ่มการทดสอบยืนยันลำดับ fallback ของ TTS และยืนยันว่า HTTP 429 หยุดทันทีโดยไม่สลับผู้ให้บริการ

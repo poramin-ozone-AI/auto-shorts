@@ -1,4 +1,4 @@
-import os, importlib.util, unittest
+import os, importlib.util, unittest, shutil, subprocess, json
 
 os.environ["GEMINI_API_KEY"] = "DUMMY_NOT_A_REAL_KEY"
 spec = importlib.util.spec_from_file_location("generator", "generate.py")
@@ -12,8 +12,39 @@ class SafeTests(unittest.TestCase):
     def test_creative_identity(self):
         self.assertIn("ความรู้แปลกๆ", g.TOPIC_PROMPT)
         self.assertIn("white round-headed stickman", g.CHARACTER)
-        self.assertIn("white and green mohawk", g.CHARACTER)
+        self.assertIn("green-and-white spiky mohawk", g.CHARACTER)
+        self.assertIn("colored-pencil/crayon", g.REFERENCE_STYLE_NOTE)
+        self.assertIn("horizontal 16:9", g.STYLE)
         self.assertIn("→ ฉากกลางเฉลยทีละชั้น", g.WRITER)
+
+    def test_character_reference_pose_assets_exist(self):
+        for i in range(1, 9):
+            self.assertTrue(os.path.isfile(f"assets/characters/pose_{i}.png"))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
+    def test_character_composite_is_landscape_16_9(self):
+        with in_tmp():
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                            "color=c=skyblue:s=1280x720", "-frames:v", "1", "bg.jpg"], check=True)
+            g.compose_character("bg.jpg", "scene.jpg", 1)
+            p = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                                "-show_entries", "stream=width,height", "-of", "json", "scene.jpg"],
+                               capture_output=True, text=True, check=True)
+            dims = json.loads(p.stdout)["streams"][0]
+            self.assertEqual((dims["width"], dims["height"]), (1920, 1080))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
+    def test_rendered_scene_is_h264_yuv420p_30fps_landscape(self):
+        with in_tmp():
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                            "color=c=yellow:s=1920x1080", "-frames:v", "1", "scene.jpg"], check=True)
+            g.make_clip("scene.jpg", 1.0, 0, "clip.mp4")
+            p = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                                "stream=codec_name,pix_fmt,width,height,r_frame_rate", "-of", "json", "clip.mp4"],
+                               capture_output=True, text=True, check=True)
+            v = json.loads(p.stdout)["streams"][0]
+            self.assertEqual((v["codec_name"], v["pix_fmt"], v["width"], v["height"], v["r_frame_rate"]),
+                             ("h264", "yuv420p", 1920, 1080, "30/1"))
 
     def test_valid_nine_scenes(self):
         self.assertTrue(g.valid({"title": "ทดสอบ", "scenes": scene_set()}))
@@ -133,6 +164,26 @@ class MockTtsTests(unittest.TestCase):
         ok, dur = self._tts("audio/L16;codec=pcm;rate=16000", rate=16000)
         self.assertTrue(ok); self.assertAlmostEqual(dur, 2.0, delta=0.1)
 
+    def test_tts_style_is_metadata_not_spoken_transcript(self):
+        old = g.call
+        captured = {}
+        pcm = b"\x00\x00" * 24000
+        def fake_call(model, body, wait=True):
+            captured.update(body)
+            return {"candidates": [{"content": {"parts": [{"inlineData": {
+                "mimeType": "audio/L16;codec=pcm;rate=24000",
+                "data": base64.b64encode(pcm).decode()
+            }}]}}]}
+        g.call = fake_call
+        try:
+            with in_tmp():
+                self.assertTrue(g.tts_gemini("นี่คือบทพูด", "tts-model", "work/voice.wav"))
+        finally:
+            g.call = old
+        part = captured["contents"][0]["parts"][0]
+        self.assertEqual(part["text"], "นี่คือบทพูด")
+        self.assertEqual(part["speechMetadata"]["style"], g.TTS_STYLE)
+
 import json, contextlib
 
 @contextlib.contextmanager
@@ -202,24 +253,24 @@ class ImageThrottleTests(unittest.TestCase):
             g.requests.get = lambda *a, **k: ImgResp(200, {"content-type": "image/jpeg"}, image_bytes)
             self.assertTrue(g.make_image("p", "work/img0.jpg", 1))
             self.assertTrue(os.path.exists("work/img0.jpg.ok"))
-            self.assertTrue(g.image_cache_valid("work/img0.jpg", "p", 1))
+            self.assertTrue(g.image_cache_valid("work/img0.jpg", None, 1))
             self.assertFalse(g.image_cache_valid("work/img0.jpg", "different prompt", 1))
             with open("work/img0.jpg", "ab") as f:
                 f.write(b"tampered")
-            self.assertFalse(g.image_cache_valid("work/img0.jpg", "p", 1))
+            self.assertFalse(g.image_cache_valid("work/img0.jpg", None, 1))
         self.assertEqual(g._consec_402, 0)
 
 
-    def test_preflight_stops_on_429(self):
+    def test_preflight_is_offline_and_consumes_no_image_request(self):
         calls = []
         old_get = g.requests.get
         g.requests.get = lambda *a, **k: (calls.append(1), ImgResp(429))[1]
         try:
             with in_tmp():
-                self.assertFalse(g.preflight_image())
+                self.assertTrue(g.preflight_image())
         finally:
             g.requests.get = old_get
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 0)
 
     def test_image_generation_stops_on_429(self):
         calls = []
@@ -239,10 +290,14 @@ class ImageThrottleTests(unittest.TestCase):
             self.assertFalse(g.make_image("p", "work/img0.jpg", 1))
 
     def test_gap_between_requests(self):
-        g.requests.get = lambda *a, **k: ImgResp(200, {"content-type": "image/jpeg"}, b"x" * 6000)
         with in_tmp():
-            g.make_image("p", "work/a.jpg", 1)
-            g.make_image("p", "work/b.jpg", 1)
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                            "color=c=orange:s=720x1280", "-frames:v", "1", "source.jpg"], check=True)
+            with open("source.jpg", "rb") as source_file:
+                image_bytes = source_file.read()
+            g.requests.get = lambda *a, **k: ImgResp(200, {"content-type": "image/jpeg"}, image_bytes)
+            self.assertTrue(g.make_image("p", "work/a.jpg", 1))
+            self.assertTrue(g.make_image("p", "work/b.jpg", 1))
         self.assertTrue(any(s >= 45 for s in self.sleeps), self.sleeps)
 
 class QuotaPolicyTests(unittest.TestCase):
@@ -287,6 +342,12 @@ class WorkflowStaticTests(unittest.TestCase):
         test_pos = content.index("python -m unittest -v test_pipeline.py")
         generate_pos = content.index("run: python generate.py")
         self.assertLess(test_pos, generate_pos)
+
+    def test_workflow_qc_requires_landscape_16_9(self):
+        with open(".github/workflows/make-short.yml", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn('(1920,1080,"30/1")', content)
+        self.assertIn('"yuv420p"', content)
 
 class CheckpointTests(unittest.TestCase):
     def setUp(self):
@@ -337,6 +398,46 @@ class AdditionalSafetyTests(unittest.TestCase):
         self.assertNotEqual(a, g.scene_fingerprint("scene B", 1))
         self.assertNotEqual(a, g.scene_fingerprint("scene A", 2))
 
+
+    def test_tts_model_priority_is_flash_then_flash_lite(self):
+        self.assertEqual(g.TTS_MODELS, ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"])
+        self.assertEqual(g.EDGE_VOICE, "th-TH-NiwatNeural")
+
+    def test_tts_uses_flash_lite_when_flash_fails(self):
+        old_gemini, old_edge = g.tts_gemini, g.tts_edge
+        calls, edge_calls = [], []
+        def fake_gemini(text, model, wav):
+            calls.append(model)
+            return model == "gemini-3.8-flash-lite-tts"
+        g.tts_gemini = fake_gemini
+        g.tts_edge = lambda *a, **k: edge_calls.append(1)
+        try:
+            with in_tmp():
+                result = g.make_voice(scene_set()[:2])
+        finally:
+            g.tts_gemini, g.tts_edge = old_gemini, old_edge
+        self.assertEqual(calls, ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"])
+        self.assertEqual(edge_calls, [])
+        self.assertEqual(result, "work/voice.wav")
+
+    def test_tts_uses_edge_only_after_both_gemini_models_fail(self):
+        old_gemini, old_edge = g.tts_gemini, g.tts_edge
+        calls, edge_calls = [], []
+        def fake_gemini(text, model, wav):
+            calls.append(model)
+            return False
+        def fake_edge(text, wav):
+            edge_calls.append(1)
+        g.tts_gemini, g.tts_edge = fake_gemini, fake_edge
+        try:
+            with in_tmp():
+                result = g.make_voice(scene_set()[:2])
+        finally:
+            g.tts_gemini, g.tts_edge = old_gemini, old_edge
+        self.assertEqual(calls, ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"])
+        self.assertEqual(edge_calls, [1])
+        self.assertEqual(result, "work/voice.wav")
+
     def test_tts_quota_does_not_fall_back_to_edge(self):
         old_gemini, old_edge = g.tts_gemini, g.tts_edge
         edge_calls = []
@@ -368,6 +469,52 @@ class AdditionalSafetyTests(unittest.TestCase):
             with open("work/img0.jpg.ok", "w") as f:
                 f.write("1")
             self.assertFalse(g.image_cache_valid("work/img0.jpg", "prompt", 1))
+
+
+class CreativeReferenceTests(unittest.TestCase):
+    def test_palette_is_not_fixed(self):
+        self.assertIn("do not use a fixed palette", g.STYLE)
+        self.assertNotIn("blue sky and ocean", g.STYLE)
+        self.assertNotIn("sunshine yellow", g.REFERENCE_STYLE_NOTE)
+
+    def test_scene_pose_selection_uses_content(self):
+        self.assertEqual(g.infer_pose({"narration": "เขาตกใจมาก", "image_prompt": "dark cave"}), "surprised")
+        self.assertEqual(g.infer_pose({"narration": "เขาวิ่งหนี", "image_prompt": "forest"}), "walk")
+        self.assertEqual(g.infer_pose({"narration": "เขาชี้ไปที่วัตถุ", "image_prompt": "laboratory"}), "point")
+        self.assertEqual(g.infer_pose({"narration": "เขาอธิบาย", "image_prompt": "museum"}), "explain")
+
+    def test_scene_text_and_pose_validation(self):
+        scenes = scene_set()
+        scenes[0]["pose"] = "surprised"
+        scenes[0]["image_text"] = "จริงหรือไม่"
+        self.assertTrue(g.valid({"title": "ทดสอบ", "scenes": scenes}))
+        scenes[0]["pose"] = "random"
+        self.assertFalse(g.valid({"title": "ทดสอบ", "scenes": scenes}))
+
+    def test_character_assets_have_transparency(self):
+        from PIL import Image
+        for i in range(1, 9):
+            im = Image.open(f"assets/characters/pose_{i}.png").convert("RGBA")
+            alpha = im.getchannel("A")
+            self.assertLess(alpha.getextrema()[0], 255, f"pose_{i} must have transparent background")
+            self.assertGreater(alpha.getextrema()[1], 0)
+
+    def test_fingerprint_includes_pose_and_image_text(self):
+        a = {"image_prompt": "sea", "pose": "neutral", "image_text": ""}
+        b = {"image_prompt": "sea", "pose": "surprised", "image_text": "ว้าว"}
+        self.assertNotEqual(g.scene_fingerprint(a, 42), g.scene_fingerprint(b, 42))
+
+    @unittest.skipUnless(os.path.isfile("/usr/share/fonts/truetype/noto/NotoSansThai-Bold.ttf"), "needs Noto Thai font")
+    def test_optional_thai_image_text_is_rendered_into_image(self):
+        from PIL import Image
+        with in_tmp():
+            Image.new("RGB", (1920, 1080), "navy").save("scene.jpg")
+            g.render_image_text("scene.jpg", "จริงหรือไม่")
+            with Image.open("scene.jpg") as rendered:
+                self.assertEqual(rendered.size, (1920, 1080))
+                self.assertEqual(rendered.format, "JPEG")
+
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
