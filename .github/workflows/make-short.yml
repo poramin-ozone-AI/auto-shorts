@@ -1,6 +1,11 @@
 name: make-short
 on:
   workflow_dispatch:
+    inputs:
+      resume:
+        description: "ใช้บทและภาพเดิมจากรอบที่ล้มล่าสุด (ไม่เรียก Gemini เขียนบทใหม่) ติ๊กเฉพาะหลังรอบที่ล้มที่ขั้นภาพ"
+        type: boolean
+        default: false
   # เปิด schedule หลังทดสอบจริงผ่าน 3–5 รอบเท่านั้น
   # schedule:
   #   - cron: "0 0 * * *"
@@ -54,8 +59,19 @@ jobs:
             : > past_titles.txt
             echo "::warning::ดึงชื่อคลิปเก่าไม่สำเร็จ ระบบกันหัวข้อซ้ำจะไม่ทำงานรอบนี้"
           fi
+      - name: กู้ checkpoint (เฉพาะเมื่อติ๊ก resume)
+        if: ${{ inputs.resume }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            checkpoint.json
+            work/img*.jpg
+            work/img*.jpg.ok
+          key: checkpoint-restore
+          restore-keys: checkpoint-
       - name: สร้างคลิป
         env:
+          RESUME: ${{ inputs.resume && '1' || '0' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NICHE: ${{ vars.NICHE }}
           VOICE_NAME: ${{ vars.VOICE_NAME }}
@@ -86,6 +102,15 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "clip-${GITHUB_RUN_ID}" output.mp4 --draft --title "$(cat title.txt)" --notes-file notes.md
+      - name: บันทึก checkpoint เมื่อล้ม (ไว้ resume)
+        if: ${{ failure() && hashFiles('checkpoint.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            checkpoint.json
+            work/img*.jpg
+            work/img*.jpg.ok
+          key: checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
       - name: เก็บ diagnostics เมื่อเกิดข้อผิดพลาด
         if: failure()
         uses: actions/upload-artifact@v4
