@@ -97,7 +97,7 @@ def call(model, body, wait=True):
         try:
             r = requests.post(API + model + ":generateContent",
                               headers={"x-goog-api-key": API_KEY, "Content-Type": "application/json"},
-                              json=body, timeout=180)
+                              json=body, timeout=(15, 120))
         except requests.RequestException as e:
             log(f"  [API {model}] เชื่อมต่อไม่ได้: {e}")
             r = None
@@ -204,9 +204,12 @@ def valid(d):
     try:
         sc = d["scenes"]
         total = sum(len(re.sub(r"\s", "", s["narration"])) for s in sc)
-        return (isinstance(d["title"], str) and d["title"].strip() and 6 <= len(sc) <= 14
-                and all(s["narration"].strip() and s["image_prompt"].strip() for s in sc)
-                and 500 <= total <= 1400)
+        return (isinstance(d["title"], str) and d["title"].strip()
+                and 8 <= len(sc) <= 14
+                and all(isinstance(s.get("narration"), str) and s["narration"].strip()
+                        and isinstance(s.get("image_prompt"), str) and s["image_prompt"].strip()
+                        for s in sc)
+                and 700 <= total <= 1100)
     except Exception:
         return False
 
@@ -308,10 +311,21 @@ def tts_gemini(text, model, wav):
         return False
     try:
         part = resp["candidates"][0]["content"]["parts"][0]
-        b64 = (part.get("inlineData") or part["inline_data"])["data"]
-        open("work/voice.pcm", "wb").write(base64.b64decode(b64))
-        run(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", "24000", "-ac", "1",
-             "-i", "work/voice.pcm", wav])
+        inline = part.get("inlineData") or part.get("inline_data")
+        if not inline or not inline.get("data"):
+            raise ValueError("ไม่พบข้อมูลเสียง inlineData")
+        audio_bytes = base64.b64decode(inline["data"], validate=True)
+        mime = (inline.get("mimeType") or inline.get("mime_type") or "").lower()
+        raw_path = "work/voice_audio.bin"
+        with open(raw_path, "wb") as f:
+            f.write(audio_bytes)
+        if audio_bytes[:4] == b"RIFF" or "wav" in mime:
+            run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw_path, "-ar", "24000", "-ac", "1", wav])
+        else:
+            run(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", "24000", "-ac", "1",
+                 "-i", raw_path, wav])
+        if not os.path.exists(wav) or os.path.getsize(wav) < 1000:
+            raise ValueError("ไฟล์เสียงที่แปลงได้ว่างหรือเล็กผิดปกติ")
         return True
     except Exception as e:
         log(f"  แปลงเสียงไม่สำเร็จ: {e}")
@@ -464,6 +478,26 @@ def main():
     open("work/list.txt", "w").write("".join(f"file '{os.path.basename(c)}'\n" for c in clips))
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", "work/list.txt",
          "-i", wav, "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "output.mp4"])
+
+    # Final media QC: fail closed rather than publish a broken MP4.
+    if not os.path.exists("output.mp4") or os.path.getsize("output.mp4") < 100_000:
+        sys.exit("ตรวจคุณภาพไม่ผ่าน: output.mp4 ไม่มีหรือมีขนาดเล็กผิดปกติ")
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries",
+         "stream=codec_type,width,height,r_frame_rate:format=duration",
+         "-of", "json", "output.mp4"], capture_output=True, text=True, check=True)
+    media = json.loads(probe.stdout)
+    videos = [x for x in media.get("streams", []) if x.get("codec_type") == "video"]
+    audios = [x for x in media.get("streams", []) if x.get("codec_type") == "audio"]
+    if not videos or not audios:
+        sys.exit("ตรวจคุณภาพไม่ผ่าน: ต้องมีทั้งภาพและเสียง")
+    v = videos[0]
+    if (v.get("width"), v.get("height"), v.get("r_frame_rate")) != (1080, 1920, "30/1"):
+        sys.exit("ตรวจคุณภาพไม่ผ่าน: ต้องเป็น 1080x1920 / 30 FPS")
+    duration = float(media.get("format", {}).get("duration", 0))
+    if duration < 1:
+        sys.exit("ตรวจคุณภาพไม่ผ่าน: ระยะเวลาวิดีโอผิดปกติ")
+    log(f"[QC ผ่าน] 1080x1920 / 30 FPS / {duration:.1f}s / มีเสียง")
 
     title = script["title"].strip().replace("\n", " ")
     if script.get("part_note"):
