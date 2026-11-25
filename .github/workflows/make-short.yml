@@ -48,7 +48,12 @@ jobs:
         run: |
           set -euo pipefail
           : > past_titles.txt
-          gh release list --limit 200 --json name --jq '.[].name' > past_titles.txt || true
+          if gh release list --limit 200 --json name --jq '.[].name' > past_titles.txt; then
+            echo "ดึงชื่อคลิปเก่าได้ $(wc -l < past_titles.txt) รายการ"
+          else
+            : > past_titles.txt
+            echo "::warning::ดึงชื่อคลิปเก่าไม่สำเร็จ ระบบกันหัวข้อซ้ำจะไม่ทำงานรอบนี้"
+          fi
       - name: สร้างคลิป
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -80,7 +85,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "clip-${GITHUB_RUN_ID}" output.mp4 --title "$(cat title.txt)" --notes-file notes.md
+          gh release create "clip-${GITHUB_RUN_ID}" output.mp4 --draft --title "$(cat title.txt)" --notes-file notes.md
       - name: เก็บ diagnostics เมื่อเกิดข้อผิดพลาด
         if: failure()
         uses: actions/upload-artifact@v4
